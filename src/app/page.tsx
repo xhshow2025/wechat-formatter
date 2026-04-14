@@ -793,16 +793,17 @@ export default function EditorPage() {
     return result;
   };
 
-  // 获取H1样式（字节绿专用）
+  // 获取H1样式
   const getH1Style = (): CSSProperties => {
-    if (selectedTemplate.id === "byte-green") {
+    if (selectedTemplate.h1Background) {
       return {
         fontSize: "18px",
         fontWeight: 600,
-        color: "#1d2129",
-        paddingLeft: "12px",
+        color: selectedTemplate.h1TextColor || "#ffffff",
+        padding: "4px 12px",
         margin: "20px 0 12px",
-        borderLeft: `5px solid #2ea250`,
+        background: selectedTemplate.h1Background,
+        borderLeft: `4px solid ${selectedTemplate.primaryColor}`,
       };
     }
     // 默认H1样式
@@ -843,14 +844,15 @@ export default function EditorPage() {
 
   // 获取标题样式（文章大标题）
   const getTitleStyle = (): CSSProperties => {
-    if (selectedTemplate.id === "byte-green") {
+    if (selectedTemplate.h1Background) {
       return {
         fontSize: "18px",
         fontWeight: 600,
-        color: "#1d2129",
-        paddingLeft: "12px",
+        color: selectedTemplate.h1TextColor || "#ffffff",
+        padding: "4px 12px",
         margin: "20px 0 12px",
-        borderLeft: `5px solid #2ea250`,
+        background: selectedTemplate.h1Background,
+        borderLeft: `4px solid ${selectedTemplate.primaryColor}`,
       };
     }
     // 默认标题样式
@@ -948,7 +950,6 @@ export default function EditorPage() {
           ...getTitleStyle(),
           cursor: "text",
           outline: "none",
-          ...(selectedBlockIndex === -1 ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
         }}
       >
         {parsedArticle.title}
@@ -977,10 +978,7 @@ export default function EditorPage() {
                 e.stopPropagation();
                 setSelectedBlockIndex(i);
               }}
-              style={{
-                ...getH1Style(),
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
-              }}
+              style={getH1Style()}
             >
               {block.content}
             </h1>
@@ -1005,10 +1003,7 @@ export default function EditorPage() {
                 e.stopPropagation();
                 setSelectedBlockIndex(i);
               }}
-              style={{
-                ...getH2Style(i),
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
-              }}
+              style={getH2Style(i)}
             >
               {block.content}
             </h2>
@@ -1033,10 +1028,7 @@ export default function EditorPage() {
                 e.stopPropagation();
                 setSelectedBlockIndex(i);
               }}
-              style={{
-                ...getH3Style(i),
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
-              }}
+              style={getH3Style(i)}
             >
               {block.content}
             </h3>
@@ -1061,10 +1053,7 @@ export default function EditorPage() {
                 e.stopPropagation();
                 setSelectedBlockIndex(i);
               }}
-              style={{
-                ...getParagraphStyle(i),
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
-              }}
+              style={getParagraphStyle(i)}
             >
               {block.content}
             </p>
@@ -1089,10 +1078,7 @@ export default function EditorPage() {
                 e.stopPropagation();
                 setSelectedBlockIndex(i);
               }}
-              style={{
-                ...getQuoteStyle(),
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
-              }}
+              style={getQuoteStyle()}
             >
               {block.content}
             </blockquote>
@@ -1123,7 +1109,6 @@ export default function EditorPage() {
                 margin: "8px 0",
                 color: selectedTemplate.textColor,
                 listStyleType: "none",
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
               }}
             >
               {(block.items || []).map((item, j) => (
@@ -1161,7 +1146,6 @@ export default function EditorPage() {
                 color: selectedTemplate.textColor,
                 listStyleType: "none",
                 counterReset: "item",
-                ...(selectedBlockIndex === i ? { boxShadow: "0 0 0 2px #1a73e8", borderRadius: "4px" } : {}),
               }}
             >
               {(block.items || []).map((item, j) => (
@@ -1189,7 +1173,6 @@ export default function EditorPage() {
                 overflow: "hidden",
                 margin: "12px 0",
                 background: "#1e1e1e",
-                outline: selectedBlockIndex === i ? "2px solid #1a73e8" : "none",
               }}
             >
               <div style={{ background: "#2d2d2d", padding: "10px 12px", borderBottom: "1px solid #3c3c3c", display: "flex", alignItems: "center", gap: "8px" }}>

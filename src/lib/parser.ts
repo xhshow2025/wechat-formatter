@@ -96,13 +96,13 @@ function isCodeBlock(lines: string[], index: number): { content: string; languag
   const line = lines[index].trim();
 
   // Markdown code block
-  if (line.startsWith("```")) {
+  if (line.startsWith("\`\`\`")) {
     const language = line.slice(3).trim();
     let content = "";
     let endIndex = index;
 
     for (let i = index + 1; i < lines.length; i++) {
-      if (lines[i].trim() === "```") {
+      if (lines[i].trim() === "\`\`\`") {
         endIndex = i;
         break;
       }
@@ -302,57 +302,68 @@ function smartParseArticle(text: string): ParsedArticle {
       continue;
     }
 
-    // 段落：合并连续的非标题/非引用行
-    if (item.type === "paragraph") {
-      let paragraphContent = item.content;
-
-      // 合并后续连续的段落行
-      let j = i + 1;
-      while (j < lineTypes.length) {
-        const next = lineTypes[j];
-        if (next.type === "paragraph") {
-          paragraphContent += " " + next.content;
-          j++;
-        } else if (next.type === "empty") {
-          j++;
-        } else {
-          break;
-        }
+    // paragraph
+    let paragraphContent = item.content;
+    let endIndex = i;
+    for (let j = i + 1; j < lineTypes.length; j++) {
+      if (lineTypes[j].type === "paragraph") {
+        paragraphContent += " " + lineTypes[j].content;
+        endIndex = j;
+      } else if (lineTypes[j].type === "empty") {
+        // 空行中断段落合并
+        break;
+      } else {
+        break;
       }
-
-      blocks.push({ type: "paragraph", content: paragraphContent });
-      i = j - 1;
-      continue;
     }
+    blocks.push({ type: "paragraph", content: paragraphContent });
+    i = endIndex;
   }
 
-  // 如果没有设置标题，用第一段作为标题
+  // 如果没有明确的H1标题，使用第一句话作为标题
   if (!titleSet && blocks.length > 0) {
-    const firstBlock = blocks[0];
-    if (firstBlock.type === "paragraph") {
-      title = firstBlock.content.slice(0, 50) + (firstBlock.content.length > 50 ? "..." : "");
-      blocks.shift();
+    if (blocks[0].type === "paragraph") {
+      title = blocks[0].content.slice(0, 30) + (blocks[0].content.length > 30 ? "..." : "");
+    } else if (blocks[0].type === "h2" || blocks[0].type === "h3") {
+      title = blocks[0].content;
     }
   }
 
   return { title, blocks };
 }
 
-// 强制Markdown解析（不自动检测）
+// 统一入口：纯文本和Markdown都走同样的预处理，然后根据类型选择解析器
+export function parseArticle(text: string): ParsedArticle {
+  if (!text) return { title: "", blocks: [] };
+
+  // 1. 预处理：将常见的不可见字符和非标准符号统一化
+  let normalizedText = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u00A0/g, " ") // non-breaking space
+    .replace(/\u200B/g, " ") // zero-width space
+    .replace(/[\u201C\u201D]/g, '"') // 智能双引号 -> 直双引号
+    .replace(/[\u2018\u2019]/g, "'"); // 智能单引号 -> 直单引号
+
+  return smartParseArticle(normalizedText);
+}
+
 export function parseMarkdownArticle(text: string): ParsedArticle {
-  const lines = text.split("\n");
+  if (!text) return { title: "", blocks: [] };
+
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n");
+
   const blocks: ParsedContent[] = [];
   let title = "未命名文章";
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (line.trim() === "") continue;
 
-    // Skip empty lines
-    if (line.trim() === "") {
-      continue;
-    }
-
-    // Check for code block first
+    // Check for code block first (can contain other markdown syntax)
     const codeBlock = isCodeBlock(lines, i);
     if (codeBlock) {
       blocks.push({
@@ -363,7 +374,7 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
       continue;
     }
 
-    // Check for quote
+    // Check for blockquote
     const quote = isQuote(lines, i);
     if (quote) {
       blocks.push({
@@ -374,20 +385,17 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
       continue;
     }
 
-    // Check for hr
-    const trimmed = line.trim();
-    if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
+    if (line.trim() === "---" || line.trim() === "***" || line.trim() === "___") {
       blocks.push({ type: "hr", content: "" });
       continue;
     }
 
-    // Check for unordered list
-    if (/^[-*•]/.test(trimmed)) {
+    // Check for lists
+    if (/^[-*•]\s/.test(line.trim())) {
       const items: string[] = [];
       let endIndex = i;
       for (let j = i; j < lines.length; j++) {
-        const listLine = lines[j].trim();
-        const match = listLine.match(/^[-*•]\s*(.+)$/);
+        const match = lines[j].trim().match(/^[-*•]\s+(.+)$/);
         if (match) {
           items.push(match[1]);
           endIndex = j;
@@ -400,151 +408,11 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
       continue;
     }
 
-    // Check for ordered list
-    if (/^\d+[.、]/.test(trimmed)) {
+    if (/^\d+\.\s/.test(line.trim())) {
       const items: string[] = [];
       let endIndex = i;
       for (let j = i; j < lines.length; j++) {
-        const listLine = lines[j].trim();
-        const match = listLine.match(/^\d+[.、]\s*(.+)$/);
-        if (match) {
-          items.push(match[1]);
-          endIndex = j;
-        } else {
-          break;
-        }
-      }
-      blocks.push({ type: "ol", content: "", items });
-      i = endIndex;
-      continue;
-    }
-
-    // Check for heading
-    const heading = isHeading(line);
-    if (heading) {
-      if (heading.level === 1 && blocks.length === 0) {
-        title = heading.text;
-      } else {
-        blocks.push({
-          type: `h${heading.level}` as "h2" | "h3",
-          content: heading.text,
-        });
-      }
-      continue;
-    }
-
-    // Regular paragraph
-    let paragraphContent = line.trim();
-    for (let j = i + 1; j < lines.length; j++) {
-      const nextLine = lines[j].trim();
-      if (nextLine === "") break;
-
-      if (
-        isHeading(nextLine) ||
-        isCodeBlock(lines, j) ||
-        isQuote(lines, j) ||
-        /^[-*•]/.test(nextLine) ||
-        /^\d+[.、]/.test(nextLine) ||
-        nextLine === "---" ||
-        nextLine === "***" ||
-        nextLine === "___"
-      ) {
-        break;
-      }
-
-      paragraphContent += " " + nextLine;
-      i = j;
-    }
-
-    blocks.push({
-      type: "paragraph",
-      content: paragraphContent,
-    });
-  }
-
-  return { title, blocks };
-}
-
-export function parseArticle(text: string): ParsedArticle {
-  // 检查是否包含Markdown标记
-  const hasMarkdown = /^[#>`*\-+]/.test(text.trim()) || /```/.test(text);
-
-  // 如果是纯文字，使用智能启发式解析
-  if (!hasMarkdown) {
-    return smartParseArticle(text);
-  }
-
-  // 否则使用标准Markdown解析
-  const lines = text.split("\n");
-  const blocks: ParsedContent[] = [];
-  let title = "未命名文章";
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Skip empty lines but maintain paragraph separation
-    if (line.trim() === "") {
-      continue;
-    }
-
-    // Check for code block first
-    const codeBlock = isCodeBlock(lines, i);
-    if (codeBlock) {
-      blocks.push({
-        type: "code",
-        content: codeBlock.content,
-      });
-      i = codeBlock.endIndex;
-      continue;
-    }
-
-    // Check for quote
-    const quote = isQuote(lines, i);
-    if (quote) {
-      blocks.push({
-        type: "quote",
-        content: quote.content,
-      });
-      i = quote.endIndex;
-      continue;
-    }
-
-    // Check for hr (--- or *** or ___)
-    const trimmed = line.trim();
-    if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
-      blocks.push({
-        type: "hr",
-        content: "",
-      });
-      continue;
-    }
-
-    // Check for unordered list (- or * or •)
-    if (/^[-*•]/.test(trimmed)) {
-      const items: string[] = [];
-      let endIndex = i;
-      for (let j = i; j < lines.length; j++) {
-        const listLine = lines[j].trim();
-        const match = listLine.match(/^[-*•]\s*(.+)$/);
-        if (match) {
-          items.push(match[1]);
-          endIndex = j;
-        } else {
-          break;
-        }
-      }
-      blocks.push({ type: "ul", content: "", items });
-      i = endIndex;
-      continue;
-    }
-
-    // Check for ordered list (1. or 1、)
-    if (/^\d+[.、]/.test(trimmed)) {
-      const items: string[] = [];
-      let endIndex = i;
-      for (let j = i; j < lines.length; j++) {
-        const listLine = lines[j].trim();
-        const match = listLine.match(/^\d+[.、]\s*(.+)$/);
+        const match = lines[j].trim().match(/^\d+\.\s+(.+)$/);
         if (match) {
           items.push(match[1]);
           endIndex = j;
@@ -605,329 +473,121 @@ export function parseArticle(text: string): ParsedArticle {
   return { title, blocks };
 }
 
-export function generateWechatHTML(article: ParsedArticle, templateId: string, images: string[] = []): string {
+export function generateWechatHTML(
+  article: ParsedArticle, 
+  templateId: string, 
+  images: string[] = [], 
+  blockCustomStyles: Record<number, { fontSize?: number; lineHeight?: number }> = {}
+): string {
   const template = templates.find((t) => t.id === templateId) || templates[0];
-  const isByteGreen = templateId === "byte-green";
-  const isAppleBento = templateId === "apple-bento";
-  const isMondrian = templateId === "mondrian";
-  const isCyberpunk = templateId === "cyberpunk";
-  const isCutePink = templateId === "cute-pink";
 
-  // 字节绿专用样式
-  const byteGreenGradient = "linear-gradient(90deg, #2ea250, #09fc3c)";
-  const byteGreenBg = "rgba(46, 162, 80, 0.05)";
+  const getH1StyleStr = () => {
+    if (template.h1Background) {
+      return `font-size: 18px; font-weight: 600; color: ${template.h1TextColor || "#ffffff"}; padding: 4px 12px; margin: 20px 0 12px; background: ${template.h1Background}; border-left: 4px solid ${template.primaryColor};`;
+    }
+    return `font-size: 20px; font-weight: 700; color: ${template.headingColor}; margin: 20px 0 12px; padding-left: 10px; border-left: 4px solid ${template.headingColor};`;
+  };
 
-  // 苹果Bento专用样式
-  const appleGradient = "linear-gradient(90deg, #0071e3, #bf5af2)";
-  const appleBg = "#ffffff";
-  const appleShadow = "";
+  const getH2StyleStr = (customSize?: number) => {
+    if (template.id === "byte-green") {
+      return `font-size: ${customSize ? customSize + 'px' : '18px'}; font-weight: 600; color: ${template.headingColor}; margin: 20px 0 12px; padding-left: 10px; border-left: 4px solid ${template.headingColor};`;
+    }
+    return `font-size: ${customSize ? customSize + 'px' : '17px'}; font-weight: 600; color: ${template.headingColor}; margin: 18px 0 10px; padding-left: 10px; border-left: 4px solid ${template.quoteBorder || template.headingColor};`;
+  };
 
-  // 蒙德里安专用样式
-  const mondrianRed = "#E63946";
-  const mondrianBlue = "#1D3557";
-  const mondrianYellow = "#F1C40F";
-  const mondrianBlack = "#111111";
+  const getH3StyleStr = (customSize?: number) => {
+    if (template.id === "byte-green") {
+      return `font-size: ${customSize ? customSize + 'px' : '15px'}; font-weight: 500; color: ${template.subheadingColor}; margin: 16px 0 8px; padding-left: 8px; border-left: 3px solid ${template.subheadingColor};`;
+    }
+    return `font-size: ${customSize ? customSize + 'px' : '15px'}; font-weight: 500; color: ${template.subheadingColor}; margin: 14px 0 8px; padding-left: 8px; border-left: 3px solid ${template.subheadingColor};`;
+  };
 
-  // 赛博朋克专用样式
-  const cyberPurple = "#D24AFC";
-  const cyberBlue = "#293DD4";
-  const cyberBg = "rgba(41, 9, 104, 0.3)";
-  const cyberGradient = "linear-gradient(to bottom, #D24AFC, #293DD4)";
+  const getParagraphStyleStr = (customSize?: number, customHeight?: number) => {
+    return `font-size: ${customSize ? customSize + 'px' : '15px'}; margin: 10px 0; text-align: justify; text-indent: 2em; line-height: ${customHeight || 1.8}; color: ${template.textColor};`;
+  };
 
-  // 可爱粉专用样式
-  const cutePinkGradient = "linear-gradient(90deg, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB)";
-  const cutePinkBg = "rgba(255, 249, 251, 0.95)";
-
-  // 根据模板决定外层背景色
-  let outerBackground = template.backgroundColor;
-  if (isCutePink) {
-    outerBackground = cutePinkBg;
-  }
+  const getQuoteStyleStr = () => {
+    return `font-style: normal; padding: 10px 15px; border-left: 4px solid ${template.quoteBorder}; background-color: ${template.quoteBackground}; margin: 12px 0; color: ${template.textColor};`;
+  };
 
   let html = `
-<section style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif; background-color: ${outerBackground}; padding: 20px; color: ${template.textColor}; line-height: 1.8; max-width: 100%;">
+<section style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif; background-color: ${template.backgroundColor}; padding: 20px; color: ${template.textColor}; line-height: 1.8; max-width: 100%;">
 `;
 
-  // 标题特殊处理 - 字节绿H1：深色背景+白色文字
-  if (isByteGreen) {
-    html += `
-  <h1 style="display: block; padding: 0.5em 0; margin: 1.5em 0 1em 0.5em; color: #1d2129; font-size: 1.8em; font-weight: 600; position: relative; border-left: 5px solid #2ea250; padding-left: 12px; line-height: 1.4;">
+  // 标题
+  html += `
+  <h1 style="${getH1StyleStr()} display: block;">
     ${article.title}
   </h1>
 `;
-  } else if (isAppleBento) {
-    html += `
-  <h1 style="display: block; padding: 1.2rem 1.8rem; margin: 1.5rem 0; color: #1d1d1f; font-size: 2.2rem; font-weight: 700; text-align: center; background: ${appleBg}; border-radius: 16px; border: 1px solid #e5e5e5;">
-    ${article.title}
-  </h1>
-`;
-  } else if (isMondrian) {
-    html += `
-  <h1 style="display: inline-block; padding: 0.5em 1em; margin: 1em 0; background-color: ${mondrianRed}; color: #F1FAEE; font-size: 2.5em; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; position: relative; box-shadow: 8px 8px 0px ${mondrianBlack}; border: 4px solid ${mondrianBlack};">
-    ${article.title}
-  </h1>
-`;
-  } else if (isCyberpunk) {
-    html += `
-  <h1 style="display: table; padding: 0.8em 1.5em; margin: 2em auto 1.5em; font-size: 1.8em; font-weight: 600; text-align: center; position: relative; background: linear-gradient(135deg, #D24AFC 0%, #293DD4 100%); border-radius: 8px; box-shadow: 0 0 20px rgba(210, 74, 252, 0.4); color: #FFFFFF; text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);">
-    ${article.title}
-  </h1>
-`;
-  } else if (isCutePink) {
-    html += `
-  <h1 style="display: block; padding: 0.8em 0; margin: 1.5em auto; color: #FFFFFF; font-size: 2.2em; font-weight: bold; text-align: center; letter-spacing: 0.1em; position: relative; line-height: 1.5; background: ${cutePinkGradient}; border-radius: 20px; box-shadow: 0 5px 15px rgba(255, 133, 162, 0.3); border: 3px solid #FFE6EE; padding-left: 1em; padding-right: 1em;">
-    ${article.title}
-  </h1>
-`;
-  } else {
-    html += `
-  <h1 style="font-size: 28px; font-weight: 700; margin-bottom: 24px; text-align: center; line-height: 1.4;"><font color="${template.headingColor}">${article.title}</font></h1>
-`;
-  }
 
-  for (const block of article.blocks) {
+  for (let i = 0; i < article.blocks.length; i++) {
+    const block = article.blocks[i];
+    const customStyles = blockCustomStyles[i] || {};
+    const customFontSize = customStyles.fontSize;
+    const customLineHeight = customStyles.lineHeight;
+
     switch (block.type) {
       case "h1":
-        if (isByteGreen) {
-          // H1样式：绿色文字+左边框
-          html += `
-  <h2 style="display: block; padding: 0.3em 0 0.3em 0.5em; margin: 1.5em 0 0.8em; font-size: 1.3em; font-weight: 600; color: #2ea250; border-left: 4px solid #2ea250; padding-left: 10px; line-height: 1.5;">${block.content}</h2>
+        html += `
+  <h1 style="${getH1StyleStr()} display: block;">${block.content}</h1>
 `;
-        } else if (isAppleBento) {
-          html += `
-  <h2 style="display: block; padding: 1rem 1.5rem; margin: 1.8em 0 1.2em; color: #1d1d1f; background: ${appleBg};  font-size: 1.8rem; font-weight: 600; text-align: left; border-radius: 14px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.07); position: relative; border: 1px solid rgba(255, 255, 255, 0.9);">
-    ${block.content}
-  </h2>
-`;
-        } else if (isMondrian) {
-          html += `
-  <h2 style="display: inline-block; padding: 0.4em 0.8em; margin: 1.5em 0 1em; background-color: ${mondrianBlue}; color: #F1FAEE; font-size: 1.8em; font-weight: bold; letter-spacing: 0.05em; position: relative; box-shadow: 6px 6px 0px ${mondrianYellow}; border: 3px solid ${mondrianBlack};">${block.content}</h2>
-`;
-        } else if (isCyberpunk) {
-          html += `
-  <h2 style="display: inline-block; padding: 0.4em 1em; margin: 2em 0 0.8em; font-size: 1.4em; font-weight: 600; background: rgba(41, 61, 212, 0.2); border-radius: 4px; border-left: 4px solid ${cyberBlue}; box-shadow: 0 0 12px rgba(41, 61, 212, 0.2); color: #00FFFF; text-shadow: 0 0 8px rgba(0, 255, 255, 0.4);">${block.content}</h2>
-`;
-        } else if (isCutePink) {
-          html += `
-  <h2 style="display: block; padding: 0.7em 1em; margin: 2em auto 1.5em; color: #FFFFFF; font-size: 1.6em; font-weight: bold; text-align: center; letter-spacing: 0.1em; background: linear-gradient(90deg, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5); border-radius: 30px; box-shadow: 0 4px 10px rgba(255, 133, 162, 0.2); border: 2px solid #FFD6E4;">${block.content}</h2>
-`;
-        } else {
-          html += `
-  <h2 style="font-size: 24px; font-weight: 700; margin: 28px 0 16px 0; padding-bottom: 8px; border-bottom: 2px solid ${template.quoteBorder};"><font color="${template.headingColor}">${block.content}</font></h2>
-`;
-        }
         break;
       case "h2":
-        if (isByteGreen) {
-          // H2样式：绿色文字+底部边框
-          html += `
-  <h2 style="display: inline-block; padding: 0.3em 0; margin: 1.5em auto 0.8em; font-size: 1.3em; font-weight: 600; text-align: center; border-bottom: 3px solid #2ea250; color: #2ea250; letter-spacing: 0.02em;">${block.content}</h2>
+        html += `
+  <h2 style="${getH2StyleStr(customFontSize)} display: block;">${block.content}</h2>
 `;
-        } else if (isAppleBento) {
-          html += `
-  <h3 style="padding: 0.8rem 1.3rem; font-size: 1.5rem; line-height: 1.4; border-radius: 12px; background: ${appleBg};  color: #1d1d1f; margin: 1.5em 0 1em; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06); border: 1px solid rgba(255, 255, 255, 0.9);">${block.content}</h3>
-`;
-        } else if (isMondrian) {
-          html += `
-  <h3 style="display: inline-block; padding: 0.3em 0.6em; margin: 1.2em 0 0.8em; background-color: ${mondrianYellow}; color: ${mondrianBlack}; font-size: 1.5em; font-weight: bold; letter-spacing: 0.03em; position: relative; box-shadow: 4px 4px 0px ${mondrianBlue}; border: 2px solid ${mondrianBlack};">${block.content}</h3>
-`;
-        } else if (isCyberpunk) {
-          html += `
-  <h3 style="padding: 0.4em 0.8em; font-size: 1.2em; border-radius: 4px; line-height: 1.5; margin: 1.5em 0 0.6em; font-weight: 500; position: relative; border-left: 3px solid ${cyberPurple}; background: rgba(210, 74, 252, 0.1); box-shadow: 0 0 8px rgba(210, 74, 252, 0.1); color: #D24AFC; text-shadow: 0 0 6px rgba(210, 74, 252, 0.3);">${block.content}</h3>
-`;
-        } else if (isCutePink) {
-          html += `
-  <h3 style="padding: 0.5em 1em; font-size: 1.4em; line-height: 1.6; margin: 2em 0 0.75em; font-weight: 600; color: #FFFFFF; background: linear-gradient(90deg, #FFB5D9, #E8B4D5, #FFDFD3); border-radius: 15px; box-shadow: 0 3px 8px rgba(255, 133, 162, 0.2); border: 2px solid #FFE6EE;">${block.content}</h3>
-`;
-        } else {
-          html += `
-  <h2 style="font-size: 20px; font-weight: 600; margin: 24px 0 14px 0; padding-left: 12px; border-left: 4px solid ${template.quoteBorder};"><font color="${template.headingColor}">${block.content}</font></h2>
-`;
-        }
         break;
       case "h3":
-        if (isByteGreen) {
-          // H3样式：深色文字+左边框
-          html += `
-  <h3 style="padding: 0.2em 0 0.2em 0.5em; font-size: 1.15em; color: #1d2129; margin: 0.8em 0 0.3em; font-weight: 600; border-left: 3px solid #4ade80; padding-left: 10px; line-height: 1.5;">${block.content}</h3>
+        html += `
+  <h3 style="${getH3StyleStr(customFontSize)} display: block;">${block.content}</h3>
 `;
-        } else if (isAppleBento) {
-          html += `
-  <h4 style="margin: 1.5em 0 1em; color: #0071e3; background: ${appleBg};  font-size: 1.3rem; font-weight: 600; padding: 0.6rem 1.2rem; display: inline-block; border-radius: 12px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05); border: 1px solid rgba(255, 255, 255, 0.9);">${block.content}</h4>
-`;
-        } else if (isMondrian) {
-          html += `
-  <h4 style="display: inline-block; padding: 0.2em 0.4em; margin: 1em 0 0.6em; color: ${mondrianBlack}; font-size: 1.2em; font-weight: bold; letter-spacing: 0.02em; position: relative; border: 2px solid ${mondrianBlack};">${block.content}</h4>
-`;
-        } else if (isCyberpunk) {
-          html += `
-  <h4 style="margin: 1.5em 0 0.5em; color: #00FFFF; font-size: 1.05em; font-weight: 500; position: relative; padding-left: 1em; border-left: 2px solid #00FFFF;">${block.content}</h4>
-`;
-        } else if (isCutePink) {
-          html += `
-  <h4 style="margin: 1.5em 0 0.8em; color: #FFFFFF; font-size: 1.2em; font-weight: bold; padding: 0.3em 1em; background: linear-gradient(90deg, #FFB5D9, #FFDFD3); border-radius: 10px; display: inline-block; box-shadow: 0 2px 6px rgba(255, 133, 162, 0.2); border: 2px solid #FFE6EE;">${block.content}</h4>
-`;
-        } else {
-          html += `
-  <h3 style="font-size: 17px; font-weight: 600; margin: 18px 0 10px 0;"><font color="${template.subheadingColor}">${block.content}</font></h3>
-`;
-        }
         break;
       case "paragraph":
-        if (isByteGreen) {
-          html += `
-  <p style="margin: 0.8em 0; letter-spacing: 0; color: #4e5969; text-align: justify; line-height: 1.7; font-size: 14px;">${parseInlineFormatting(block.content)}</p>
+        html += `
+  <p style="${getParagraphStyleStr(customFontSize, customLineHeight)}">${parseInlineFormatting(block.content)}</p>
 `;
-        } else if (isAppleBento) {
-          html += `
-  <p style="margin: 1.2rem 0; font-size: 1.05rem; color: #1d1d1f; text-align: left; line-height: 1.7;">${parseInlineFormatting(block.content)}</p>
-`;
-        } else if (isMondrian) {
-          html += `
-  <p style="margin: 1em 0; color: ${mondrianBlack}; line-height: 1.8;">${parseInlineFormatting(block.content)}</p>
-`;
-        } else if (isCyberpunk) {
-          html += `
-  <p style="margin: 1.2em 0; letter-spacing: 0.02em; color: #0a011a; text-align: justify; line-height: 1.8; font-size: 15px; background-color: rgba(255, 255, 255, 0.95); padding: 12px 14px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); border: 1px solid rgba(210, 74, 252, 0.3);">${parseInlineFormatting(block.content)}</p>
-`;
-        } else if (isCutePink) {
-          html += `
-  <p style="margin: 1em 0; letter-spacing: 0.05em; color: #555555; text-align: justify; line-height: 1.8; text-indent: 2em;">${parseInlineFormatting(block.content)}</p>
-`;
-        } else {
-          html += `
-  <p style="font-size: 16px; margin: 12px 0; text-align: justify; text-indent: 2em;"><font color="${template.textColor}">${parseInlineFormatting(block.content)}</font></p>
-`;
-        }
         break;
       case "quote":
-        if (isByteGreen) {
-          html += `
-  <blockquote style="font-style: normal; padding: 0.8em 0.8em 0.8em 1.5em; border-left: 3px solid #2ea250; border-radius: 4px; color: #4e5969; background: ${byteGreenBg}; margin: 0.8em 0; position: relative;">${parseInlineFormatting(block.content)}</blockquote>
+        html += `
+  <blockquote style="${getQuoteStyleStr()}">${parseInlineFormatting(block.content)}</blockquote>
 `;
-        } else if (isAppleBento) {
-          html += `
-  <blockquote style="font-style: italic; padding: 1.2rem 1.5rem; color: #1d1d1f; margin: 1.5em 0; font-weight: 500; position: relative; border-left: 4px solid #0071e3; background: rgba(0, 113, 227, 0.05); border-radius: 0 8px 8px 0;">${parseInlineFormatting(block.content)}</blockquote>
-`;
-        } else if (isMondrian) {
-          html += `
-  <blockquote style="margin: 1.5em 0; padding: 1em; border-left: 8px solid ${mondrianBlue}; background-color: rgba(241, 196, 15, 0.1); font-style: italic;">${parseInlineFormatting(block.content)}</blockquote>
-`;
-        } else if (isCyberpunk) {
-          html += `
-  <blockquote style="font-style: normal; padding: 0.8em 1.2em; margin: 1.2em 0; color: #0a011a; background: rgba(255, 255, 255, 0.9); border-left: 4px solid ${cyberPurple}; box-shadow: 0 0 10px rgba(210, 74, 252, 0.2); border-radius: 0 6px 6px 0;">${parseInlineFormatting(block.content)}</blockquote>
-`;
-        } else if (isCutePink) {
-          html += `
-  <blockquote style="font-style: normal; padding: 0.8em 1.2em 0.8em 2em; border-radius: 10px; color: #666666; background: rgba(255, 245, 249, 0.8); margin: 1.2em 0; position: relative; border-left: 5px solid #FFB5D9;">${parseInlineFormatting(block.content)}</blockquote>
-`;
-        } else {
-          html += `
-  <blockquote style="background: ${template.quoteBackground}; border-left: 4px solid ${template.quoteBorder}; padding: 16px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; font-style: italic;">${parseInlineFormatting(block.content)}</blockquote>
-`;
-        }
         break;
       case "code":
-        // 微信最基础代码块
         const codeContentEscaped = block.content.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br/>");
         html += `
-<fieldset style="border: 2px solid #888; border-radius: 4px; margin: 12px 0; padding: 8px 12px; background: #1e1e1e;">
-  <legend style="color: #888; font-size: 12px; padding: 0 4px;">● ● ● code.js</legend>
-  <p style="margin: 0; padding: 0; font-family: Menlo, Monaco, Consolas, monospace; font-size: 13px; color: #fff; line-height: 1.6;">${codeContentEscaped}</p>
-</fieldset>`;
+<div style="border-radius: 8px; overflow: hidden; margin: 12px 0; background: #1e1e1e;">
+  <div style="background: #2d2d2d; padding: 10px 12px; border-bottom: 1px solid #3c3c3c; display: flex; align-items: center; gap: 8px;">
+    <span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; display: inline-block; margin-right: 6px;"></span>
+    <span style="width: 12px; height: 12px; border-radius: 50%; background: #febc2e; display: inline-block; margin-right: 6px;"></span>
+    <span style="width: 12px; height: 12px; border-radius: 50%; background: #28c840; display: inline-block;"></span>
+    <span style="font-size: 12px; color: #888; font-family: system-ui; margin-left: 8px;">code.js</span>
+  </div>
+  <pre style="margin: 0; padding: 16px; overflow-x: auto; color: #d4d4d4; font-family: Consolas, Monaco, 'Courier New', monospace; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;">${codeContentEscaped}</pre>
+</div>`;
         break;
       case "ul":
-        if (isByteGreen) {
-          html += `
-<ul style="margin: 12px 0; padding-left: 20px;">
-${block.items?.map(item => `<li style="margin: 6px 0; color: #4e5969;">◉ <span style="color: #2ea250;">${parseInlineFormatting(item)}</span></li>`).join("")}
+        html += `
+<ul style="padding-left: 24px; margin: 8px 0; color: ${template.textColor}; list-style-type: none;">
+${block.items?.map(item => `  <li style="margin: 8px 0; line-height: 1.6; position: relative; padding-left: 16px;">
+    <span style="position: absolute; left: 0; color: ${template.headingColor || "#2ea250"}; font-weight: bold;">•</span>
+    ${parseInlineFormatting(item)}
+  </li>`).join("\n")}
 </ul>`;
-        } else if (isAppleBento) {
-          html += `
-<ul style="margin: 12px 0; padding-left: 20px;">
-${block.items?.map(item => `<li style="margin: 6px 0; color: #1d1d1f;">● ${parseInlineFormatting(item)}</li>`).join("")}
-</ul>`;
-        } else if (isMondrian) {
-          html += `
-<ul style="margin: 12px 0; padding-left: 20px;">
-${block.items?.map(item => `<li style="margin: 6px 0; color: ${mondrianBlack};">■ ${parseInlineFormatting(item)}</li>`).join("")}
-</ul>`;
-        } else if (isCyberpunk) {
-          html += `
-<ul style="margin: 12px 0; padding-left: 20px;">
-${block.items?.map(item => `<li style="margin: 6px 0; color: #00FFFF;">▹ ${parseInlineFormatting(item)}</li>`).join("")}
-</ul>`;
-        } else if (isCutePink) {
-          html += `
-<ul style="margin: 12px 0; padding-left: 20px;">
-${block.items?.map(item => `<li style="margin: 6px 0; color: #555555;">💖 ${parseInlineFormatting(item)}</li>`).join("")}
-</ul>`;
-        } else {
-          html += `
-<ul style="margin: 12px 0; padding-left: 20px;">
-${block.items?.map(item => `<li style="margin: 6px 0; color: ${template.textColor};">• ${parseInlineFormatting(item)}</li>`).join("")}
-</ul>`;
-        }
         break;
       case "ol":
-        if (isByteGreen) {
-          html += `
-<ol style="margin: 12px 0; padding-left: 24px; list-style: none;">
-${block.items?.map((item, idx) => `<li style="margin: 6px 0; color: #4e5969;">${idx + 1}. <span style="color: #2ea250;">${parseInlineFormatting(item)}</span></li>`).join("")}
+        html += `
+<ol style="padding-left: 0; margin: 8px 0; color: ${template.textColor}; list-style-type: none; counter-reset: item;">
+${block.items?.map((item, j) => `  <li style="margin: 8px 0; line-height: 1.6; position: relative; padding-left: 32px; counter-increment: item;">
+    <span style="position: absolute; left: 0; width: 22px; height: 22px; line-height: 22px; text-align: center; background: ${template.headingColor || "#2ea250"}; color: #fff; border-radius: 50%; font-size: 12px; font-weight: bold;">${j + 1}</span>
+    ${parseInlineFormatting(item)}
+  </li>`).join("\n")}
 </ol>`;
-        } else if (isAppleBento) {
-          html += `
-<ol style="margin: 12px 0; padding-left: 24px; list-style: none;">
-${block.items?.map((item, idx) => `<li style="margin: 6px 0; color: #1d1d1f;">${idx + 1}. ${parseInlineFormatting(item)}</li>`).join("")}
-</ol>`;
-        } else if (isMondrian) {
-          html += `
-<ol style="margin: 12px 0; padding-left: 24px; list-style: none;">
-${block.items?.map((item, idx) => `<li style="margin: 6px 0; color: ${mondrianBlack};">${idx + 1}. ${parseInlineFormatting(item)}</li>`).join("")}
-</ol>`;
-        } else if (isCyberpunk) {
-          html += `
-<ol style="margin: 12px 0; padding-left: 24px; list-style: none;">
-${block.items?.map((item, idx) => `<li style="margin: 6px 0; color: #00FFFF;">${idx + 1}. ${parseInlineFormatting(item)}</li>`).join("")}
-</ol>`;
-        } else if (isCutePink) {
-          html += `
-<ol style="margin: 12px 0; padding-left: 24px; list-style: none;">
-${block.items?.map((item, idx) => `<li style="margin: 6px 0; color: #555555;">${idx + 1}. ${parseInlineFormatting(item)}</li>`).join("")}
-</ol>`;
-        } else {
-          html += `
-<ol style="margin: 12px 0; padding-left: 24px; list-style: none;">
-${block.items?.map((item, idx) => `<li style="margin: 6px 0; color: ${template.textColor};">${idx + 1}. ${parseInlineFormatting(item)}</li>`).join("")}
-</ol>`;
-        }
         break;
       case "hr":
-        if (isByteGreen) {
-          html += `
-  <hr style="height: 3px; border: none; margin: 2em auto; background: ${byteGreenGradient}; border-radius: 3px;">
-`;
-        } else if (isAppleBento) {
-          html += `
-  <hr style="height: 2px; border: none; margin: 2em auto; background: ${appleGradient}; border-radius: 2px;">
-`;
-        } else if (isMondrian) {
-          html += `
-  <hr style="height: 4px; border: none; margin: 2em auto; background: ${mondrianRed} ${mondrianYellow} ${mondrianBlue}; border-radius: 2px;">
-`;
-        } else if (isCyberpunk) {
-          html += `
-  <hr style="height: 2px; border: none; margin: 2em auto; background: linear-gradient(90deg, transparent, ${cyberPurple}, ${cyberBlue}, transparent);">
-`;
-        } else if (isCutePink) {
-          html += `
-  <hr style="height: 6px; border: none; margin: 2em auto; background: linear-gradient(90deg, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB); border-radius: 3px;">
-`;
-        } else {
-          html += `
+        html += `
   <hr style="height: 1px; border: none; margin: 24px 0; background: ${template.quoteBorder};">
 `;
-        }
         break;
     }
   }
