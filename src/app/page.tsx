@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useCallback, useEffect, CSSProperties } from "react";
+import { useSession, signOut } from "next-auth/react";
 import { parseArticle, parseMarkdownArticle, generateWechatHTML, ParsedArticle, ParsedContent } from "@/lib/parser";
 import { templates, Template } from "@/lib/templates";
+import Link from "next/link";
 
 const sampleText = `微信公众号排版工具使用指南
 
@@ -323,6 +325,7 @@ function formatText(text) {
 *工具版本：v2.0 | 更新日期：2024年*`;
 
 export default function EditorPage() {
+  const { data: session } = useSession();
   const [inputText, setInputText] = useState(sampleText);
   const [selectedTemplate, setSelectedTemplate] = useState<Template>(templates[0]);
   const [parsedArticle, setParsedArticle] = useState<ParsedArticle | null>(null);
@@ -696,15 +699,6 @@ export default function EditorPage() {
     } catch {
       showToast("复制失败，请重试");
     }
-  };
-
-  // 分享链接
-  const handleShare = async () => {
-    const html = generateWechatHTML(parsedArticle!, selectedTemplate.id);
-    const encoded = btoa(encodeURIComponent(html));
-    const url = `${window.location.origin}/share?c=${encoded}`;
-    await navigator.clipboard.writeText(url);
-    showToast("分享链接已复制");
   };
 
   // 清空
@@ -1335,8 +1329,21 @@ export default function EditorPage() {
           <span style={styles.logo}>排</span>
           <span style={styles.title}>文字排版</span>
         </div>
-        <div style={styles.templateLabel}>
-          模板：{selectedTemplate.name}
+        <div style={styles.headerRight}>
+          <div style={styles.templateLabel}>
+            模板：{selectedTemplate.name}
+          </div>
+          {session ? (
+            <div style={styles.userArea}>
+              <span style={styles.userName}>{session.user?.name || session.user?.email}</span>
+              <Link href="/articles" style={styles.articlesLink}>我的文章</Link>
+              <button onClick={() => signOut()} style={styles.logoutBtn}>退出登录</button>
+            </div>
+          ) : (
+            <div style={styles.userArea}>
+              <Link href="/login" style={styles.loginBtn}>登录</Link>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1579,7 +1586,6 @@ export default function EditorPage() {
           {isAnalyzing ? "分析中..." : "✨ AI分析排版"}
         </button>
         <button onClick={handleCopy} style={styles.primaryBtn}>复制到微信</button>
-        <button onClick={handleShare} style={styles.toolBtn}>分享</button>
         <button onClick={handleClear} style={styles.toolBtn}>清空</button>
       </footer>
 
@@ -1630,6 +1636,42 @@ const styles: { [key: string]: CSSProperties } = {
   templateLabel: {
     fontSize: "13px",
     color: "#666",
+  },
+  headerRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: "20px",
+  },
+  userArea: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+  },
+  userName: {
+    fontSize: "13px",
+    color: "#333",
+  },
+  articlesLink: {
+    fontSize: "13px",
+    color: "#1a73e8",
+    textDecoration: "none",
+  },
+  loginBtn: {
+    fontSize: "13px",
+    color: "#1a73e8",
+    textDecoration: "none",
+    padding: "6px 16px",
+    border: "1px solid #1a73e8",
+    borderRadius: "6px",
+  },
+  logoutBtn: {
+    fontSize: "13px",
+    color: "#666",
+    background: "none",
+    border: "1px solid #ddd",
+    padding: "6px 12px",
+    borderRadius: "6px",
+    cursor: "pointer",
   },
   main: {
     display: "flex",
