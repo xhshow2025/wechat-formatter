@@ -711,6 +711,32 @@ export default function EditorPage() {
     setUploadedImages([]);
   };
 
+  // 保存文章
+  const handleSaveArticle = async () => {
+    if (!parsedArticle || !session) return;
+    
+    const title = parsedArticle.title || "未命名文章";
+    const content = inputText;
+    const blocks = parsedArticle.blocks;
+    const template = selectedTemplate.id;
+
+    try {
+      const res = await fetch("/api/articles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, content, blocks, template })
+      });
+
+      if (res.ok) {
+        showToast("文章已保存");
+      } else {
+        showToast("保存失败");
+      }
+    } catch {
+      showToast("保存失败，请重试");
+    }
+  };
+
   // 处理图片上传
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -1585,6 +1611,7 @@ export default function EditorPage() {
         <button onClick={handleAIAnalyze} style={{ ...styles.aiBtn }} disabled={isAnalyzing}>
           {isAnalyzing ? "分析中..." : "✨ AI分析排版"}
         </button>
+        {session && <button onClick={handleSaveArticle} style={styles.toolBtn}>保存文章</button>}
         <button onClick={handleCopy} style={styles.primaryBtn}>复制到微信</button>
         <button onClick={handleClear} style={styles.toolBtn}>清空</button>
       </footer>
