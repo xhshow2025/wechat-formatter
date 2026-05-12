@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server"
-import { PrismaClient } from "@prisma/client"
 import bcrypt from "bcryptjs"
 import crypto from "crypto"
 import { sendVerificationEmailViaResend } from "@/lib/email"
 import { registerEmailUser } from "@/lib/registration"
+import { prisma } from "@/lib/prisma"
 
-const prisma = new PrismaClient()
-
+export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 export async function POST(request: Request) {
