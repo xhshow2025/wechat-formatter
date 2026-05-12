@@ -1,10 +1,72 @@
 "use client";
 
-import { useState, useCallback, useEffect, CSSProperties } from "react";
+import { useState, useCallback, useEffect, useRef, CSSProperties } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { parseArticle, parseMarkdownArticle, generateWechatHTML, ParsedArticle, ParsedContent } from "@/lib/parser";
 import { templates, Template } from "@/lib/templates";
 import Link from "next/link";
+
+type HeadingLevel = "h1" | "h2" | "h3";
+
+const defaultTypeFontSizes: Record<string, number> = {
+  h1: 16,
+  h2: 16,
+  h3: 16,
+  paragraph: 16,
+  quote: 16,
+  list: 16,
+};
+
+const defaultHeadingPreferences: Record<HeadingLevel, HeadingLevel> = {
+  h1: "h1",
+  h2: "h2",
+  h3: "h3",
+};
+
+const localDraftStorageKey = "wechat-formatter-current-draft";
+
+interface SavedFormatSettings {
+  blockCustomStyles?: Record<number, { fontSize?: number; lineHeight?: number }>;
+  typeFontSizes?: Record<string, number>;
+  includeBackgroundColor?: boolean;
+  headingPreferences?: Record<HeadingLevel, HeadingLevel>;
+  isFormattedMode?: boolean;
+}
+
+interface SavedBlocksPayload {
+  version: number;
+  blocks: ParsedContent[];
+  format?: SavedFormatSettings;
+}
+
+function InsertParagraphIcon({ direction }: { direction: "above" | "below" }) {
+  const isAbove = direction === "above";
+
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      style={{ display: "block" }}
+    >
+      <path
+        d="M3 4.5h10M3 11.5h10"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <path
+        d={isAbove ? "M8 9V6M6.5 7.5 8 6l1.5 1.5" : "M8 7v3m-1.5-1.5L8 10l1.5-1.5"}
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 const sampleText = `微信公众号排版工具使用指南
 
@@ -31,7 +93,7 @@ AI分析排版功能可以自动识别文章的大纲结构，准确判断哪些
 
 效果展示
 
-重点内容高亮显示：本文档中的加粗文字会突出显示，数字如2024、99.9%等也会特殊标记。
+重点内容高亮显示：本文档中的加粗文字会突出显示，数字如2024、99.9%等保持常规文本样式。
 
 引用样式：以下是一段引用内容的示例效果，会以特殊的背景和边框呈现。
 
@@ -74,10 +136,10 @@ const sampleMarkdown = `# 📝 微信公众号排版工具使用指南
 
 1. 简约白 - 白底黑字，专注阅读
 2. 杂志风 - 大标题小正文
-3. 极客黑 - 深色背景，代码友好
-4. 商务蓝 - 正式严肃
-5. 文艺绿 - 小清新风格
-6. 字节绿 - 科技感
+3. 商务蓝 - 正式严肃
+4. 文艺绿 - 小清新风格
+5. 字节绿 - 科技感
+6. 手绘彩铅 - 柔和插画风
 
 ### 第四步：复制使用
 
@@ -129,7 +191,7 @@ console.log('排版工具示例代码');
 
 ### 加粗与高亮
 
-本文档支持**加粗文字**高亮显示，数字如**2024**、**99.9%**等也会特殊标记，突出重点内容。
+本文档支持**加粗文字**高亮显示，数字如**2024**、**99.9%**等保持常规文本样式。
 
 ## 💡 高级编辑技巧
 
@@ -194,7 +256,7 @@ DOC文档模式：导入标准文档自动转换
 
 **重点强调文字**自动高亮
 
-数字数据如**2024年**、**99.9%**等自动标记
+数字数据如**2024年**、**99.9%**等保持常规文本样式
 
 ### 第三步：选择模板
 
@@ -203,8 +265,6 @@ DOC文档模式：导入标准文档自动转换
 简约白 - 经典白底黑字风格
 
 杂志风 - 大标题配小正文
-
-极客黑 - 深色背景科技感
 
 商务蓝 - 正式职场风格
 
@@ -223,6 +283,8 @@ DOC文档模式：导入标准文档自动转换
 暖时光 - 暖色生活风格
 
 学术灰 - 论文引用风格
+
+手绘彩铅 - 柔和插画风
 
 ### 第四步：复制发布
 
@@ -266,7 +328,7 @@ DOC文档模式：导入标准文档自动转换
 
 ### 加粗高亮
 
-支持**加粗文字**强调，数字如**2024**、**88.8%**自动高亮显示。
+支持**加粗文字**强调，数字如**2024**、**88.8%**保持常规文本样式。
 
 ## 💻 代码示例
 
@@ -304,7 +366,7 @@ function formatText(text) {
 
 | 内容类型 | 推荐模板 |
 |----------|----------|
-| 科技数码 | 极客黑、商务蓝 |
+| 科技数码 | 字节绿、商务蓝 |
 | 生活娱乐 | 暖时光、可爱粉 |
 | 新闻资讯 | 简约白、学术灰 |
 | 产品推广 | 苹果Bento、渐变酷 |
@@ -325,10 +387,16 @@ function formatText(text) {
 *工具版本：v2.0 | 更新日期：2024年*`;
 
 export default function EditorPage() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const [articleIdFromUrl, setArticleIdFromUrl] = useState<string | null>(null);
+  const [hasReadUrlParams, setHasReadUrlParams] = useState(false);
   const [inputText, setInputText] = useState(sampleText);
+  const inputTextRef = useRef(sampleText);
   const [selectedTemplate, setSelectedTemplate] = useState<Template>(templates[0]);
   const [parsedArticle, setParsedArticle] = useState<ParsedArticle | null>(null);
+  const parsedArticleRef = useRef<ParsedArticle | null>(null);
+  const [isFormattedMode, setIsFormattedMode] = useState(true);
+  const [currentArticleId, setCurrentArticleId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [inputType, setInputType] = useState<"text" | "md" | "doc">("text");
@@ -341,28 +409,150 @@ export default function EditorPage() {
   const [codeBlockHeights, setCodeBlockHeights] = useState<Record<number, number>>({});
   // 每个块的局部样式覆盖
   const [blockCustomStyles, setBlockCustomStyles] = useState<Record<number, { fontSize?: number; lineHeight?: number }>>({});
+  // 分类字号配置
+  const [typeFontSizes, setTypeFontSizes] = useState<Record<string, number>>(defaultTypeFontSizes);
+  const [showFontSizeMenu, setShowFontSizeMenu] = useState(false);
+  const [activeFontType, setActiveFontType] = useState<string>("paragraph");
+  const [includeBackgroundColor, setIncludeBackgroundColor] = useState(true);
+  const [showTypographyMenu, setShowTypographyMenu] = useState(false);
+  const [headingPreferences, setHeadingPreferences] = useState<Record<HeadingLevel, HeadingLevel>>(defaultHeadingPreferences);
   // 当前选中块的局部样式（编辑用）
   const [editingBlockFontSize, setEditingBlockFontSize] = useState<number>(15);
   const [editingBlockLineHeight, setEditingBlockLineHeight] = useState<number>(1.8);
   // 上传的图片列表
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  // 文本框光标位置
+  const [cursorPosition, setCursorPosition] = useState<number>(0);
+  const shouldReplaceArticleAsPlainRef = useRef(false);
+  const hasInitializedRef = useRef(false);
   // 撤销功能 - 历史记录
   const [history, setHistory] = useState<ParsedArticle[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  // 选中文字检测
-  const [hasSelection, setHasSelection] = useState(false);
+  const historyIndexRef = useRef(-1);
+  // 选中文字检测。不要用 state 记录选区，否则重渲染会让浏览器选区消失。
+  const selectionRangeRef = useRef<Range | null>(null);
+  const previewEditorRef = useRef<HTMLDivElement | null>(null);
+  const headingLevels: HeadingLevel[] = ["h1", "h2", "h3"];
 
-  // 检测选中文字
-  const checkSelection = useCallback(() => {
+  const getDisplayBlockType = (type: ParsedContent["type"]): ParsedContent["type"] => {
+    return headingLevels.includes(type as HeadingLevel)
+      ? headingPreferences[type as HeadingLevel]
+      : type;
+  };
+
+  const getActiveToolbarBtnStyle = (active: boolean): CSSProperties => ({
+    ...styles.toolbarBtn,
+    ...(active ? {
+      borderColor: "#1a73e8",
+      backgroundColor: "#e8f0fe",
+      color: "#1a73e8",
+      fontWeight: 600,
+    } : {}),
+  });
+
+  const serializeArticleToInput = (article: ParsedArticle): string => {
+    const lines = [article.title, ""];
+
+    article.blocks.forEach((block) => {
+      switch (block.type) {
+        case "h1":
+          lines.push(`# ${block.content}`);
+          break;
+        case "h2":
+          lines.push(`## ${block.content}`);
+          break;
+        case "h3":
+          lines.push(`### ${block.content}`);
+          break;
+        case "quote":
+          lines.push(`> ${block.content}`);
+          break;
+        case "code":
+          lines.push("```", block.content, "```");
+          break;
+        case "ul":
+          (block.items || []).forEach(item => lines.push(`- ${item}`));
+          break;
+        case "ol":
+          (block.items || []).forEach((item, index) => lines.push(`${index + 1}. ${item}`));
+          break;
+        case "hr":
+          lines.push("---");
+          break;
+        case "image":
+          lines.push(`[IMAGE:${block.content}]`);
+          break;
+        case "table":
+          lines.push(block.content);
+          break;
+        default:
+          lines.push(block.content);
+      }
+      lines.push("");
+    });
+
+    return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  };
+
+  const syncInputFromArticle = (article: ParsedArticle) => {
+    const nextInput = serializeArticleToInput(article);
+    inputTextRef.current = nextInput;
+    setInputText(nextInput);
+  };
+
+  const setEditorInput = (value: string) => {
+    inputTextRef.current = value;
+    setInputText(value);
+  };
+
+  const saveCurrentSelection = useCallback(() => {
     const selection = window.getSelection();
-    const hasSel = selection && selection.toString().trim().length > 0;
-    setHasSelection(!!hasSel);
+    if (!selection || selection.rangeCount === 0 || !selection.toString().trim()) {
+      selectionRangeRef.current = null;
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const previewEditor = previewEditorRef.current;
+    if (!previewEditor || !previewEditor.contains(range.commonAncestorContainer)) {
+      selectionRangeRef.current = null;
+      return;
+    }
+
+    selectionRangeRef.current = range.cloneRange();
   }, []);
+
+  const hasActivePreviewSelection = () => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.toString().trim()) return false;
+
+    const previewEditor = previewEditorRef.current;
+    return !!previewEditor && previewEditor.contains(selection.getRangeAt(0).commonAncestorContainer);
+  };
+
+  const handlePreviewBlockClick = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (hasActivePreviewSelection()) {
+      saveCurrentSelection();
+      return;
+    }
+    setSelectedBlockIndex(index);
+  };
+
+  const restoreSavedSelection = () => {
+    const selection = window.getSelection();
+    if (!selection || !selectionRangeRef.current) return false;
+
+    selection.removeAllRanges();
+    selection.addRange(selectionRangeRef.current);
+    return true;
+  };
 
   // 保存快照到历史记录
   const saveToHistory = useCallback((article: ParsedArticle) => {
     setHistory(prev => {
-      const newHistory = prev.slice(0, historyIndex + 1);
+      const newHistory = prev.slice(0, historyIndexRef.current + 1);
       newHistory.push(JSON.parse(JSON.stringify(article)));
       // 最多保存50条历史
       if (newHistory.length > 50) {
@@ -371,15 +561,245 @@ export default function EditorPage() {
       }
       return newHistory;
     });
-    setHistoryIndex(prev => Math.min(prev + 1, 49));
-  }, [historyIndex]);
+    setHistoryIndex(prev => {
+      const nextIndex = Math.min(prev + 1, 49);
+      historyIndexRef.current = nextIndex;
+      return nextIndex;
+    });
+  }, []);
+
+  const parseInputToArticle = useCallback((text: string, typeOverride: "text" | "md" | "doc" = inputType): ParsedArticle | null => {
+    if (!text.trim()) return null;
+    return typeOverride === "md" ? parseMarkdownArticle(text) : parseArticle(text);
+  }, [inputType]);
+
+  const applyParsedInput = useCallback((text: string, saveHistorySnapshot = true, typeOverride: "text" | "md" | "doc" = inputType) => {
+    const parsed = parseInputToArticle(text, typeOverride);
+    parsedArticleRef.current = parsed;
+    setParsedArticle(parsed);
+    setIsFormattedMode(!!parsed);
+    if (parsed && saveHistorySnapshot) {
+      saveToHistory(parsed);
+    }
+  }, [inputType, parseInputToArticle, saveToHistory]);
+
+  const escapeHtml = (text: string) => {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
+  const createPlainArticleFromInput = (text: string): ParsedArticle | null => {
+    const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const blocks: ParsedContent[] = [];
+    let paragraphLines: string[] = [];
+
+    const flushParagraph = () => {
+      if (paragraphLines.length === 0) return;
+      blocks.push({
+        type: "paragraph",
+        content: paragraphLines.map((line) => escapeHtml(line)).join("<br>"),
+      });
+      paragraphLines = [];
+    };
+
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
+
+      if (!line.trim()) {
+        flushParagraph();
+        continue;
+      }
+
+      paragraphLines.push(line);
+    }
+
+    flushParagraph();
+    if (blocks.length === 0) {
+      return null;
+    }
+
+    return { title: "", blocks };
+  };
+
+  const applyPlainInput = (text: string) => {
+    const plainArticle = createPlainArticleFromInput(text);
+    parsedArticleRef.current = plainArticle;
+    setParsedArticle(plainArticle);
+    setIsFormattedMode(false);
+    if (plainArticle) {
+      saveToHistory(plainArticle);
+    }
+  };
+
+  const parseEditableInputContent = (text: string): ParsedArticle => {
+    const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const firstContentIndex = lines.findIndex((line) => line.trim());
+    const title = firstContentIndex >= 0
+      ? lines[firstContentIndex].trim().replace(/^#{1,3}\s+/, "")
+      : "";
+    const blocks: ParsedContent[] = [];
+    let paragraphLines: string[] = [];
+
+    const flushParagraph = () => {
+      if (paragraphLines.length === 0) return;
+      blocks.push({ type: "paragraph", content: paragraphLines.join(" ").trim() });
+      paragraphLines = [];
+    };
+
+    for (let i = firstContentIndex + 1; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        flushParagraph();
+        continue;
+      }
+
+      if (trimmed.startsWith("```")) {
+        flushParagraph();
+        const codeLines: string[] = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].trim() === "```") {
+            i = j;
+            break;
+          }
+          codeLines.push(lines[j]);
+          i = j;
+        }
+        blocks.push({ type: "code", content: codeLines.join("\n") });
+        continue;
+      }
+
+      const imageMatch = trimmed.match(/^!\[.*?\]\((.+)\)$/) || trimmed.match(/^\[IMAGE:(.+)\]$/);
+      if (imageMatch) {
+        flushParagraph();
+        blocks.push({ type: "image", content: imageMatch[1] });
+        continue;
+      }
+
+      if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
+        flushParagraph();
+        blocks.push({ type: "hr", content: "" });
+        continue;
+      }
+
+      const headingMatch = trimmed.match(/^(#{1,6})\s*(.+)$/);
+      if (headingMatch) {
+        flushParagraph();
+        blocks.push({
+          type: `h${Math.min(headingMatch[1].length, 3)}` as "h1" | "h2" | "h3",
+          content: headingMatch[2].trim(),
+        });
+        continue;
+      }
+
+      if (trimmed.startsWith(">")) {
+        flushParagraph();
+        blocks.push({ type: "quote", content: trimmed.replace(/^>\s*/, "") });
+        continue;
+      }
+
+      if (/^[-*•]\s+/.test(trimmed)) {
+        flushParagraph();
+        const items: string[] = [];
+        for (let j = i; j < lines.length; j++) {
+          const match = lines[j].trim().match(/^[-*•]\s+(.+)$/);
+          if (!match) break;
+          items.push(match[1]);
+          i = j;
+        }
+        blocks.push({ type: "ul", content: "", items });
+        continue;
+      }
+
+      if (/^\d+[.、]\s+/.test(trimmed)) {
+        flushParagraph();
+        const items: string[] = [];
+        for (let j = i; j < lines.length; j++) {
+          const match = lines[j].trim().match(/^\d+[.、]\s+(.+)$/);
+          if (!match) break;
+          items.push(match[1]);
+          i = j;
+        }
+        blocks.push({ type: "ol", content: "", items });
+        continue;
+      }
+
+      paragraphLines.push(trimmed);
+    }
+
+    flushParagraph();
+    return { title, blocks };
+  };
+
+  const coerceBlockContent = (existingBlock: ParsedContent | undefined, incomingBlock: ParsedContent): ParsedContent => {
+    if (!existingBlock) {
+      if (incomingBlock.type === "image" || incomingBlock.type === "code" || incomingBlock.type === "hr") {
+        return incomingBlock;
+      }
+      return {
+        type: "paragraph",
+        content: incomingBlock.items?.join("\n") || incomingBlock.content || "",
+      };
+    }
+
+    if (existingBlock.type === "ul" || existingBlock.type === "ol") {
+      const items = incomingBlock.items && incomingBlock.items.length > 0
+        ? incomingBlock.items
+        : (incomingBlock.content || "").split(/\n+/).map((item) => item.trim()).filter(Boolean);
+      return { ...existingBlock, items: items.length > 0 ? items : existingBlock.items };
+    }
+
+    if (existingBlock.type === "hr") {
+      return existingBlock;
+    }
+
+    const content = incomingBlock.items?.join("\n") || incomingBlock.content || "";
+    return { ...existingBlock, content };
+  };
+
+  const syncArticleTextWithoutReflow = (text: string) => {
+    const incomingArticle = parseEditableInputContent(text);
+    const currentArticle = parsedArticleRef.current;
+
+    if (!currentArticle) {
+      applyPlainInput(text);
+      return;
+    }
+
+    const maxLength = Math.max(currentArticle.blocks.length, incomingArticle.blocks.length);
+    const nextBlocks: ParsedContent[] = [];
+
+    for (let index = 0; index < maxLength; index++) {
+      const incomingBlock = incomingArticle.blocks[index];
+      if (!incomingBlock) continue;
+      nextBlocks.push(coerceBlockContent(currentArticle.blocks[index], incomingBlock));
+    }
+
+    const nextArticle: ParsedArticle = {
+      title: incomingArticle.title || currentArticle.title,
+      blocks: nextBlocks,
+    };
+
+    parsedArticleRef.current = nextArticle;
+    setParsedArticle(nextArticle);
+    saveToHistory(nextArticle);
+  };
 
   // 撤销
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1;
+      const restoredArticle = JSON.parse(JSON.stringify(history[newIndex]));
+      historyIndexRef.current = newIndex;
       setHistoryIndex(newIndex);
-      setParsedArticle(JSON.parse(JSON.stringify(history[newIndex])));
+      parsedArticleRef.current = restoredArticle;
+      setParsedArticle(restoredArticle);
+      syncInputFromArticle(restoredArticle);
       showToast("已撤销");
     } else {
       showToast("没有可撤销的操作");
@@ -402,16 +822,6 @@ export default function EditorPage() {
   // 标记正在转换格式的块索引，避免 onBlur 覆盖数据
   const [convertingBlockIndex, setConvertingBlockIndex] = useState<number | null>(null);
 
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      const selection = window.getSelection();
-      const hasText = selection && selection.toString().trim().length > 0;
-      setHasSelection(!!hasText);
-    };
-    document.addEventListener("selectionchange", handleSelectionChange);
-    return () => document.removeEventListener("selectionchange", handleSelectionChange);
-  }, []);
-
   const sampleTexts = {
     text: sampleText,
     md: sampleMarkdown,
@@ -426,52 +836,67 @@ export default function EditorPage() {
 
   // 切换输入类型时加载示例
   const handleTypeChange = (type: "text" | "md" | "doc") => {
+    const nextText = sampleTexts[type];
     setInputType(type);
-    setInputText(sampleTexts[type]);
+    setEditorInput(nextText);
+    if (type === "md") {
+      applyParsedInput(nextText, true, type);
+    } else {
+      applyPlainInput(nextText);
+    }
+    setCurrentArticleId(null);
     setShowTypeDropdown(false);
     setSelectedBlockIndex(null);
+  };
+
+  const handleInputPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const target = e.currentTarget;
+    const selectedAll =
+      target.selectionStart === 0 &&
+      target.selectionEnd === inputTextRef.current.length;
+
+    if (!inputTextRef.current.trim() || selectedAll) {
+      shouldReplaceArticleAsPlainRef.current = true;
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const nextText = e.target.value;
+    setEditorInput(nextText);
+    setCursorPosition(e.target.selectionStart);
+
+    if (!nextText.trim()) {
+      parsedArticleRef.current = null;
+      setParsedArticle(null);
+      setIsFormattedMode(false);
+      setSelectedBlockIndex(null);
+      setEditingBlockIndex(null);
+      setEditingTitle(false);
+      return;
+    }
+
+    if (shouldReplaceArticleAsPlainRef.current) {
+      shouldReplaceArticleAsPlainRef.current = false;
+      if (inputType === "md") {
+        applyParsedInput(nextText, true, "md");
+      } else {
+        applyPlainInput(nextText);
+      }
+      return;
+    }
+
+    if (inputType === "md") {
+      applyParsedInput(nextText, true, "md");
+      return;
+    }
+
+    syncArticleTextWithoutReflow(nextText);
   };
 
   // 选中块
   const handleSelectBlock = (index: number) => {
     setSelectedBlockIndex(selectedBlockIndex === index ? null : index);
     setEditingBlockIndex(null);
-    // 初始化选中块的局部样式值
-    if (blockCustomStyles[index]) {
-      setEditingBlockFontSize(blockCustomStyles[index].fontSize || 15);
-      setEditingBlockLineHeight(blockCustomStyles[index].lineHeight || 1.8);
-    } else {
-      setEditingBlockFontSize(15);
-      setEditingBlockLineHeight(1.8);
-    }
-  };
-
-  // 调整选中块的字号
-  const adjustBlockFontSize = (delta: number) => {
-    if (selectedBlockIndex === null) return;
-    const newSize = Math.max(10, Math.min(32, editingBlockFontSize + delta));
-    setEditingBlockFontSize(newSize);
-    setBlockCustomStyles(prev => ({
-      ...prev,
-      [selectedBlockIndex]: {
-        ...prev[selectedBlockIndex],
-        fontSize: newSize,
-      }
-    }));
-  };
-
-  // 调整选中块的行高
-  const adjustBlockLineHeight = (delta: number) => {
-    if (selectedBlockIndex === null) return;
-    const newHeight = Math.max(1.0, Math.min(3.0, editingBlockLineHeight + delta));
-    setEditingBlockLineHeight(newHeight);
-    setBlockCustomStyles(prev => ({
-      ...prev,
-      [selectedBlockIndex]: {
-        ...prev[selectedBlockIndex],
-        lineHeight: newHeight,
-      }
-    }));
   };
 
   // 开始编辑块内容
@@ -487,26 +912,28 @@ export default function EditorPage() {
 
   // 更新文章内容并保存历史
   const updateArticle = (article: ParsedArticle) => {
+    parsedArticleRef.current = article;
     saveToHistory(article);
     setParsedArticle(article);
+    syncInputFromArticle(article);
   };
 
   // 保存块编辑
   const handleSaveBlock = () => {
-    if (!parsedArticle || editingBlockIndex === null) return;
+    const currentArticle = parsedArticleRef.current;
+    if (!currentArticle || editingBlockIndex === null) return;
 
-    const block = parsedArticle.blocks[editingBlockIndex];
+    const block = currentArticle.blocks[editingBlockIndex];
     if (!block) return;
 
-    const newBlocks = [...parsedArticle.blocks];
+    const newBlocks = [...currentArticle.blocks];
     if (block.type === "ul" || block.type === "ol") {
       newBlocks[editingBlockIndex] = { ...block, items: blockText.split("\n").filter(line => line.trim()) };
     } else {
       newBlocks[editingBlockIndex] = { ...block, content: blockText };
     }
 
-    saveToHistory({ ...parsedArticle, blocks: newBlocks });
-    setParsedArticle({ ...parsedArticle, blocks: newBlocks });
+    updateArticle({ ...currentArticle, blocks: newBlocks });
     setEditingBlockIndex(null);
   };
 
@@ -520,20 +947,22 @@ export default function EditorPage() {
 
   // 保存标题
   const handleSaveTitle = () => {
-    if (parsedArticle) {
-      updateArticle({ ...parsedArticle, title: titleText });
+    const currentArticle = parsedArticleRef.current;
+    if (currentArticle) {
+      updateArticle({ ...currentArticle, title: titleText });
       setEditingTitle(false);
     }
   };
 
   // 修改块类型
   const handleChangeBlockType = (index: number, newType: ParsedContent["type"]) => {
-    if (parsedArticle) {
+    const currentArticle = parsedArticleRef.current;
+    if (currentArticle) {
       // 设置标记，避免 onBlur 覆盖数据
       setConvertingBlockIndex(index);
       setTimeout(() => setConvertingBlockIndex(null), 100);
 
-      const newBlocks = [...parsedArticle.blocks];
+      const newBlocks = [...currentArticle.blocks];
       const oldBlock = newBlocks[index];
 
       // 列表转正文
@@ -559,54 +988,58 @@ export default function EditorPage() {
       else {
         newBlocks[index] = { ...oldBlock, type: newType };
       }
-      updateArticle({ ...parsedArticle, blocks: newBlocks });
+      updateArticle({ ...currentArticle, blocks: newBlocks });
     }
   };
 
   // 删除块
   const handleDeleteBlock = (index: number) => {
-    if (parsedArticle) {
-      const newBlocks = parsedArticle.blocks.filter((_, i) => i !== index);
-      updateArticle({ ...parsedArticle, blocks: newBlocks });
+    const currentArticle = parsedArticleRef.current;
+    if (currentArticle) {
+      const newBlocks = currentArticle.blocks.filter((_, i) => i !== index);
+      updateArticle({ ...currentArticle, blocks: newBlocks });
       setSelectedBlockIndex(null);
     }
   };
 
   // 添加块
   const handleAddBlock = (index: number, position: "above" | "below") => {
-    if (parsedArticle) {
+    const currentArticle = parsedArticleRef.current;
+    if (currentArticle) {
       const newBlock: ParsedContent = { type: "paragraph", content: "新段落" };
-      const newBlocks = [...parsedArticle.blocks];
+      const newBlocks = [...currentArticle.blocks];
       const insertIndex = position === "above" ? index : index + 1;
       newBlocks.splice(insertIndex, 0, newBlock);
-      updateArticle({ ...parsedArticle, blocks: newBlocks });
+      updateArticle({ ...currentArticle, blocks: newBlocks });
     }
   };
 
   // 转换为引用
   const handleConvertToQuote = (index: number) => {
-    if (parsedArticle) {
+    const currentArticle = parsedArticleRef.current;
+    if (currentArticle) {
       // 设置标记，避免 onBlur 覆盖数据
       setConvertingBlockIndex(index);
       setTimeout(() => setConvertingBlockIndex(null), 100);
-      const newBlocks = [...parsedArticle.blocks];
+      const newBlocks = [...currentArticle.blocks];
       // 列表内容存在 items 中，需要合并为字符串
       const content = newBlocks[index].items
         ? newBlocks[index].items.join('\n')
         : newBlocks[index].content;
       newBlocks[index] = { type: "quote", content };
-      updateArticle({ ...parsedArticle, blocks: newBlocks });
+      updateArticle({ ...currentArticle, blocks: newBlocks });
     }
   };
 
   // 转换为列表
   const handleConvertToList = (index: number, listType: "ul" | "ol") => {
-    if (parsedArticle) {
+    const currentArticle = parsedArticleRef.current;
+    if (currentArticle) {
       // 设置标记，避免 onBlur 覆盖数据
       setConvertingBlockIndex(index);
       setTimeout(() => setConvertingBlockIndex(null), 100);
 
-      const newBlocks = [...parsedArticle.blocks];
+      const newBlocks = [...currentArticle.blocks];
       const content = newBlocks[index].content;
       // 如果内容包含换行，按换行拆分；否则按句子拆分
       const items = content
@@ -618,7 +1051,7 @@ export default function EditorPage() {
         content: "",
         items: items.length > 0 ? items : [content]
       };
-      updateArticle({ ...parsedArticle, blocks: newBlocks });
+      updateArticle({ ...currentArticle, blocks: newBlocks });
     }
   };
 
@@ -631,57 +1064,162 @@ export default function EditorPage() {
     });
   };
 
-  // 解析文章
-  const handleParse = useCallback(() => {
-    if (!inputText.trim()) {
-      setParsedArticle(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setArticleIdFromUrl(params.get("articleId"));
+    setHasReadUrlParams(true);
+  }, []);
+
+  // 首次进入新文章时加载示例；MD 自动排版，其它保持纯内容。
+  useEffect(() => {
+    if (!hasReadUrlParams || hasInitializedRef.current || articleIdFromUrl) {
       return;
     }
-    let parsed: ParsedArticle;
-    if (inputType === "md") {
-      // MD文档：强制Markdown解析
-      parsed = parseMarkdownArticle(inputText);
-    } else {
-      // 纯文本/DOC：智能解析
-      parsed = parseArticle(inputText);
+
+    hasInitializedRef.current = true;
+    const savedDraftRaw = localStorage.getItem(localDraftStorageKey);
+    if (savedDraftRaw) {
+      try {
+        const savedDraft = JSON.parse(savedDraftRaw);
+        const savedBlocks = savedDraft.blocks;
+        const blocks = savedBlocks && Array.isArray((savedBlocks as SavedBlocksPayload).blocks)
+          ? (savedBlocks as SavedBlocksPayload).blocks
+          : [];
+        const formatSettings = savedBlocks && Array.isArray((savedBlocks as SavedBlocksPayload).blocks)
+          ? (savedBlocks as SavedBlocksPayload).format
+          : undefined;
+        const article: ParsedArticle = {
+          title: savedDraft.title || "未命名文章",
+          blocks,
+        };
+
+        setEditorInput(savedDraft.content || serializeArticleToInput(article));
+        parsedArticleRef.current = article;
+        setParsedArticle(article);
+        setIsFormattedMode(formatSettings?.isFormattedMode ?? true);
+        setBlockCustomStyles(formatSettings?.blockCustomStyles || {});
+        setTypeFontSizes(formatSettings?.typeFontSizes || defaultTypeFontSizes);
+        setIncludeBackgroundColor(formatSettings?.includeBackgroundColor ?? true);
+        setHeadingPreferences(formatSettings?.headingPreferences || defaultHeadingPreferences);
+        setSelectedTemplate(templates.find((template) => template.id === savedDraft.template) || templates[0]);
+        setHistory([JSON.parse(JSON.stringify(article))]);
+        setHistoryIndex(0);
+        historyIndexRef.current = 0;
+        return;
+      } catch {
+        localStorage.removeItem(localDraftStorageKey);
+      }
     }
-    setParsedArticle(parsed);
-    saveToHistory(parsed);
-  }, [inputText, inputType, saveToHistory]);
+
+    if (inputType === "md") {
+      applyParsedInput(inputTextRef.current, true, "md");
+    } else {
+      applyPlainInput(inputTextRef.current);
+    }
+  }, [articleIdFromUrl, applyParsedInput, hasReadUrlParams, inputType]);
+
+  // 从文章库进入时加载已有文章。加载后左侧保留原文，右侧使用保存过的 blocks。
+  useEffect(() => {
+    if (!hasReadUrlParams) return;
+
+    if (!articleIdFromUrl) {
+      setCurrentArticleId(null);
+      return;
+    }
+
+    if (status === "loading") return;
+    if (!session?.user?.id) return;
+
+    let cancelled = false;
+
+    const loadArticle = async () => {
+      try {
+        const res = await fetch(`/api/articles/${articleIdFromUrl}`);
+        const data = await res.json();
+
+        if (!res.ok) {
+          showToast(data.error || "加载文章失败");
+          return;
+        }
+
+        let blocks: ParsedContent[] = [];
+        let formatSettings: SavedFormatSettings | undefined;
+        try {
+          const savedBlocks = typeof data.blocks === "string"
+            ? JSON.parse(data.blocks || "[]")
+            : data.blocks;
+
+          if (Array.isArray(savedBlocks)) {
+            blocks = savedBlocks;
+          } else if (savedBlocks && Array.isArray((savedBlocks as SavedBlocksPayload).blocks)) {
+            blocks = (savedBlocks as SavedBlocksPayload).blocks;
+            formatSettings = (savedBlocks as SavedBlocksPayload).format;
+          }
+        } catch {
+          blocks = [];
+        }
+
+        const article: ParsedArticle = {
+          title: data.title || "未命名文章",
+          blocks,
+        };
+
+        if (cancelled) return;
+
+        const nextInput = data.content || serializeArticleToInput(article);
+        inputTextRef.current = nextInput;
+        setInputText(nextInput);
+        parsedArticleRef.current = article;
+        setParsedArticle(article);
+        setIsFormattedMode(formatSettings?.isFormattedMode ?? true);
+        setBlockCustomStyles(formatSettings?.blockCustomStyles || {});
+        setTypeFontSizes(formatSettings?.typeFontSizes || defaultTypeFontSizes);
+        setIncludeBackgroundColor(formatSettings?.includeBackgroundColor ?? true);
+        setHeadingPreferences(formatSettings?.headingPreferences || defaultHeadingPreferences);
+        setCurrentArticleId(data.id);
+        setHistory([JSON.parse(JSON.stringify(article))]);
+        setHistoryIndex(0);
+        historyIndexRef.current = 0;
+
+        const savedTemplate = templates.find((template) => template.id === data.template);
+        setSelectedTemplate(savedTemplate || templates[0]);
+      } catch {
+        if (!cancelled) {
+          showToast("加载文章失败");
+        }
+      }
+    };
+
+    loadArticle();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [articleIdFromUrl, hasReadUrlParams, session?.user?.id, status]);
 
   // AI分析文章结构
   const handleAIAnalyze = useCallback(async () => {
-    if (!inputText.trim()) {
+    const textToFormat = inputTextRef.current;
+    if (!textToFormat.trim()) {
       showToast("请先输入文章内容");
       return;
     }
     setIsAnalyzing(true);
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: inputText }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        showToast(data.error || "分析失败");
+      const formattedArticle = parseInputToArticle(textToFormat);
+      if (!formattedArticle) {
+        showToast("请先输入文章内容");
         return;
       }
-      const newArticle = { title: data.title, blocks: data.blocks };
-      setParsedArticle(newArticle);
-      saveToHistory(newArticle);
-      showToast("AI分析完成！");
+      updateArticle(formattedArticle);
+      setIsFormattedMode(true);
+      showToast("排版完成");
     } catch {
-      showToast("网络错误，请重试");
+      showToast("排版失败，请重试");
     } finally {
       setIsAnalyzing(false);
     }
-  }, [inputText, saveToHistory]);
-
-  // 初始化解析
-  useEffect(() => {
-    handleParse();
-  }, [handleParse]);
+  }, [parseInputToArticle]);
 
   // 模板切换
   const handleTemplateChange = (template: Template) => {
@@ -691,7 +1229,15 @@ export default function EditorPage() {
   // 复制到微信
   const handleCopy = async () => {
     try {
-      const html = generateWechatHTML(parsedArticle!, selectedTemplate.id, uploadedImages);
+      const articleToCopy = syncArticleFromPreview();
+      if (!articleToCopy) {
+        showToast("请先输入文章内容");
+        return;
+      }
+
+      const html = isFormattedMode
+        ? generateWechatHTML(articleToCopy, selectedTemplate.id, [], blockCustomStyles, typeFontSizes, includeBackgroundColor, headingPreferences)
+        : generatePlainHTML(articleToCopy);
       const blob = new Blob([html], { type: "text/html" });
       const clipboardItem = new ClipboardItem({ "text/html": blob });
       await navigator.clipboard.write([clipboardItem]);
@@ -703,62 +1249,180 @@ export default function EditorPage() {
 
   // 清空
   const handleClear = () => {
-    setInputText("");
+    setEditorInput("");
+    parsedArticleRef.current = null;
     setParsedArticle(null);
+    setIsFormattedMode(false);
+    setCurrentArticleId(null);
     setSelectedBlockIndex(null);
     setEditingBlockIndex(null);
     setEditingTitle(false);
     setUploadedImages([]);
+    localStorage.removeItem(localDraftStorageKey);
   };
 
-  // 保存文章
-  const handleSaveArticle = async () => {
-    if (!parsedArticle || !session) return;
-    
-    const title = parsedArticle.title || "未命名文章";
-    const content = inputText;
-    const blocks = parsedArticle.blocks;
-    const template = selectedTemplate.id;
+  const buildSaveBody = (articleToSave: ParsedArticle) => {
+    const title = articleToSave.title || "未命名文章";
+    const content = inputTextRef.current;
+    const blocks: SavedBlocksPayload = {
+      version: 2,
+      blocks: articleToSave.blocks,
+      format: {
+        blockCustomStyles,
+        typeFontSizes,
+        includeBackgroundColor,
+        headingPreferences,
+        isFormattedMode,
+      },
+    };
+
+    return {
+      title,
+      content,
+      blocks,
+      template: selectedTemplate.id,
+    };
+  };
+
+  // 小保存：保存当前页面草稿，不写入文章库
+  const handleSaveCurrent = () => {
+    const articleToSave = syncArticleFromPreview();
+    if (!articleToSave) {
+      showToast("请先输入文章内容");
+      return;
+    }
 
     try {
-      const res = await fetch("/api/articles", {
-        method: "POST",
+      localStorage.setItem(localDraftStorageKey, JSON.stringify({
+        ...buildSaveBody(articleToSave),
+        savedAt: Date.now(),
+      }));
+      showToast("当前排版已保存");
+    } catch {
+      showToast("保存失败，请重试");
+    }
+  };
+
+  // 保存到文章库：需要登录，写入服务端文章库
+  const handleSaveToLibrary = async () => {
+    const articleToSave = syncArticleFromPreview();
+    if (!articleToSave) {
+      showToast("请先输入文章内容");
+      return;
+    }
+
+    if (!session) {
+      showToast("请先登录后再保存到文章库");
+      return;
+    }
+
+    const isUpdating = Boolean(currentArticleId);
+
+    try {
+      const res = await fetch(isUpdating ? `/api/articles/${currentArticleId}` : "/api/articles", {
+        method: isUpdating ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content, blocks, template })
+        body: JSON.stringify(buildSaveBody(articleToSave))
       });
+      const data = await res.json().catch(() => null);
 
       if (res.ok) {
-        showToast("文章已保存");
+        if (!isUpdating && data?.id) {
+          setCurrentArticleId(data.id);
+        }
+        showToast(isUpdating ? "文章库已更新" : "已保存到文章库");
       } else {
-        showToast("保存失败");
+        showToast(data?.error || "保存失败");
       }
     } catch {
       showToast("保存失败，请重试");
     }
   };
 
-  // 处理图片上传
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-
-    Array.from(files).forEach((file) => {
+  // 处理图片上传 - 插入到光标位置
+  const readFileAsDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setUploadedImages((prev) => [...prev, event.target!.result as string]);
-        }
-      };
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
+  };
 
-    // 清空input以便重复选择同一文件
-    e.target.value = "";
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    let usedLocalFallback = false;
+    let uploadErrorMessage = "";
+    try {
+      const uploadPromises = Array.from(files).map(async (file) => {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          const res = await fetch("/api/upload", {
+            method: "POST",
+            body: formData,
+          });
+
+          const data = await res.json().catch(() => null);
+
+          if (!res.ok) {
+            const details = data?.details;
+            const detailText = [
+              details?.code,
+              details?.message,
+              details?.requestId ? `RequestId: ${details.requestId}` : "",
+            ].filter(Boolean).join(" | ");
+
+            throw new Error(detailText || data?.error || "Upload failed");
+          }
+
+          if (!data.url) {
+            throw new Error("Upload missing url");
+          }
+          return data.url;
+        } catch (error) {
+          console.warn("图床上传失败，已降级为本地图片:", error);
+          usedLocalFallback = true;
+          uploadErrorMessage = error instanceof Error ? error.message : "未知错误";
+          return readFileAsDataUrl(file);
+        }
+      });
+
+      const urls = await Promise.all(uploadPromises);
+      const validUrls = urls.filter((url) => !!url);
+
+      if (validUrls.length > 0) {
+        // 在光标位置插入图片标记
+        const before = inputText.slice(0, cursorPosition);
+        const after = inputText.slice(cursorPosition);
+        const imageMarkers = validUrls.map(url => `[IMAGE:${url}]`).join("\n");
+        const newInputText = before + (before && !before.endsWith("\n") ? "\n\n" : "") + imageMarkers + "\n" + after;
+
+        setEditorInput(newInputText);
+        // 更新光标位置到插入内容之后
+        setCursorPosition(before.length + imageMarkers.length + (before && !before.endsWith("\n") ? 2 : 1));
+        showToast(usedLocalFallback ? `图床上传失败：${uploadErrorMessage}` : `成功插入 ${validUrls.length} 张图片`);
+      }
+    } catch (error) {
+      console.error("图片上传失败:", error);
+      showToast("图片处理失败，请重试");
+    } finally {
+      setIsUploading(false);
+      // 清空input以便重复选择同一文件
+      e.target.value = "";
+    }
   };
 
   // 删除上传的图片
   const handleDeleteImage = (index: number) => {
-    setUploadedImages((prev) => prev.filter((_, i) => i !== index));
+    if (parsedArticle) {
+      const newBlocks = parsedArticle.blocks.filter((_, i) => i !== index);
+      updateArticle({ ...parsedArticle, blocks: newBlocks });
+    }
   };
 
   // 图片拖拽排序
@@ -801,59 +1465,222 @@ export default function EditorPage() {
     setTimeout(() => setToastMessage(""), 2000);
   };
 
-  // 处理文字中的格式标记
-  const processText = (text: string) => {
-    // 高亮数字
-    let result = text.replace(
-      /(\d+(?:\.\d+)?%|\d+\.\d+亿元|\d+亿|\d+x)/g,
-      '§§§§§$1§§§§§'
-    );
-    // 加粗
-    result = result.replace(/\*\*(.*?)\*\*/g, '【加粗】$1【/加粗】');
-    return result;
+  const normalizeEditableHtml = (html: string) => {
+    return html
+      .replace(/<div><br><\/div>/gi, "<br>")
+      .replace(/<div>/gi, "<br>")
+      .replace(/<\/div>/gi, "")
+      .replace(/<font\s+color=["']?([^"'>\s]+)["']?\s*>(.*?)<\/font>/gi, '<span style="color: $1;">$2</span>')
+      .trim();
+  };
+
+  const generatePlainHTML = (article: ParsedArticle) => {
+    const renderContent = (content: string) => content || "";
+    const blocks = article.blocks.map((block) => {
+      switch (block.type) {
+        case "image":
+          return `<p style="margin: 12px 0;"><img src="${block.content}" style="max-width: 100%; height: auto;" /></p>`;
+        case "ul":
+          return `<ul style="margin: 8px 0; padding-left: 1.2em;">${(block.items || []).map((item) => `<li>${renderContent(item)}</li>`).join("")}</ul>`;
+        case "ol":
+          return `<ol style="margin: 8px 0; padding-left: 1.2em;">${(block.items || []).map((item) => `<li>${renderContent(item)}</li>`).join("")}</ol>`;
+        case "code":
+          return `<pre style="white-space: pre-wrap; margin: 12px 0;">${escapeHtml(block.content)}</pre>`;
+        case "table":
+          return `<div style="overflow-x: auto; margin: 12px 0;">${block.content}</div>`;
+        case "hr":
+          return `<hr style="border: none; border-top: 1px solid #ddd; margin: 16px 0;" />`;
+        default:
+          return `<p style="margin: 8px 0; line-height: 1.7; color: #333;">${renderContent(block.content)}</p>`;
+      }
+    }).join("");
+
+    return `<section style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif; color: #333; line-height: 1.7;">${blocks}</section>`;
+  };
+
+  const updateHtmlBlock = (index: number, html: string) => {
+    const newContent = normalizeEditableHtml(html);
+    const currentArticle = parsedArticleRef.current;
+    const currentBlock = currentArticle?.blocks[index];
+    if (!currentBlock || currentBlock.content === newContent) return;
+
+    const newBlocks = [...currentArticle.blocks];
+    newBlocks[index] = { ...newBlocks[index], content: newContent };
+    updateArticle({ ...currentArticle, blocks: newBlocks });
+  };
+
+  const getListItemsFromHtml = (element: HTMLElement) => {
+    const listItems = Array.from(element.querySelectorAll("li"));
+    if (listItems.length > 0) {
+      return listItems.map((item) => {
+        const contentNode = item.querySelector("[data-list-content]") as HTMLElement | null;
+        return normalizeEditableHtml((contentNode || item).innerHTML);
+      }).filter(Boolean);
+    }
+
+    return normalizeEditableHtml(element.innerHTML)
+      .split(/<br\s*\/?>|\n/gi)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  };
+
+  const syncArticleFromPreview = (): ParsedArticle | null => {
+    const currentArticle = parsedArticleRef.current;
+    const previewEditor = previewEditorRef.current;
+    if (!currentArticle || !previewEditor) return currentArticle;
+
+    const titleElement = previewEditor.querySelector('[data-preview-title="true"]') as HTMLElement | null;
+    const nextTitle = titleElement ? normalizeEditableHtml(titleElement.innerHTML) : currentArticle.title;
+    const nextBlocks = currentArticle.blocks.map((block, index) => {
+      const blockElement = previewEditor.querySelector(`[data-block-index="${index}"]`) as HTMLElement | null;
+      if (!blockElement) return block;
+
+      if (block.type === "ul" || block.type === "ol") {
+        const items = getListItemsFromHtml(blockElement);
+        return { ...block, items };
+      }
+
+      if (block.type === "code") {
+        return { ...block, content: blockElement.textContent || "" };
+      }
+
+      if (block.type === "image" || block.type === "hr" || block.type === "table") {
+        return block;
+      }
+
+      return { ...block, content: normalizeEditableHtml(blockElement.innerHTML) };
+    });
+
+    const nextArticle: ParsedArticle = { title: nextTitle, blocks: nextBlocks };
+    const hasChanged = JSON.stringify({
+      title: currentArticle.title,
+      blocks: currentArticle.blocks,
+    }) !== JSON.stringify({
+      title: nextArticle.title,
+      blocks: nextArticle.blocks,
+    });
+
+    if (hasChanged) {
+      parsedArticleRef.current = nextArticle;
+      setParsedArticle(nextArticle);
+      saveToHistory(nextArticle);
+      syncInputFromArticle(nextArticle);
+    }
+
+    return nextArticle;
+  };
+
+  const applyTextCommand = (command: string, value?: string) => {
+    if (!restoreSavedSelection()) {
+      saveCurrentSelection();
+    }
+
+    document.execCommand("styleWithCSS", false, "true");
+    document.execCommand(command, false, value);
+    saveCurrentSelection();
   };
 
   // 获取H1样式
   const getH1Style = (): CSSProperties => {
+    const size = typeFontSizes.h1;
+    if (selectedTemplate.id === "byte-green") {
+      return {
+        display: "table",
+        padding: "0.5em 2em",
+        margin: "1.5em auto 1em",
+        color: "#1d2129",
+        fontSize: `${size}px`,
+        fontWeight: 600,
+        textAlign: "center",
+        background: "linear-gradient(90deg, #2ea250, #09fc3c)",
+        backgroundSize: "100% 35%",
+        backgroundPosition: "bottom 0.15em center",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+    if (selectedTemplate.id === "cute-pink") {
+      return {
+        display: "table",
+        padding: "0.8em 2em",
+        margin: "2em auto 1.5em",
+        color: "#FFFFFF",
+        fontSize: `${size}px`,
+        fontWeight: "bold",
+        textAlign: "center",
+        letterSpacing: "0.1em",
+        position: "relative",
+        lineHeight: 1.5,
+        width: "fit-content",
+        maxWidth: "90%",
+        background: "linear-gradient(135deg, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB, #FF85A2)",
+        borderRadius: "20px",
+        boxShadow: "0 5px 15px rgba(255, 133, 162, 0.3)",
+        border: "3px solid #FFE6EE",
+      };
+    }
     if (selectedTemplate.h1Background) {
       return {
-        fontSize: "18px",
+        fontSize: `${size}px`,
         fontWeight: 600,
         color: selectedTemplate.h1TextColor || "#ffffff",
         padding: "4px 12px",
         margin: "20px 0 12px",
         background: selectedTemplate.h1Background,
-        borderLeft: `4px solid ${selectedTemplate.primaryColor}`,
+        borderLeft: `4px solid ${selectedTemplate.h1Color || selectedTemplate.primaryColor}`,
       };
     }
     // 默认H1样式
     return {
-      fontSize: "20px",
+      fontSize: `${size}px`,
       fontWeight: 700,
-      color: selectedTemplate.headingColor,
+      color: selectedTemplate.h1Color || selectedTemplate.headingColor,
       margin: "20px 0 12px",
       paddingLeft: "10px",
-      borderLeft: `4px solid ${selectedTemplate.headingColor}`,
+      borderLeft: `4px solid ${selectedTemplate.h1Color || selectedTemplate.headingColor}`,
     };
   };
 
   // 获取H2样式
   const getH2Style = (blockIndex: number): CSSProperties => {
     const customSize = blockCustomStyles[blockIndex]?.fontSize;
+    const typeSize = typeFontSizes.h2;
     if (selectedTemplate.id === "byte-green") {
-      // 字节绿H2: 绿色文字+左边框（原来的H1样式）
       return {
-        fontSize: customSize ? `${customSize}px` : "18px",
+        display: "table",
+        padding: "0.3em 1em",
+        margin: "1em auto 0.6em",
+        color: "white",
+        background: "linear-gradient(135deg, #2ea250, #09fc3c)",
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
         fontWeight: 600,
-        color: selectedTemplate.headingColor, // 绿色
-        margin: "20px 0 12px",
-        paddingLeft: "10px",
-        borderLeft: `4px solid ${selectedTemplate.headingColor}`,
+        textAlign: "center",
+        borderRadius: "6px",
+        letterSpacing: "0.02em",
+        boxShadow: "0 2px 4px rgba(46, 162, 80, 0.15)",
+      };
+    }
+    if (selectedTemplate.id === "cute-pink") {
+      return {
+        display: "table",
+        padding: "0.7em 1.2em",
+        margin: "2.5em auto 1.8em",
+        color: "#FFFFFF",
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        fontWeight: "bold",
+        textAlign: "center",
+        letterSpacing: "0.1em",
+        position: "relative",
+        width: "fit-content",
+        maxWidth: "85%",
+        background: "linear-gradient(135deg, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5)",
+        borderRadius: "30px",
+        boxShadow: "0 4px 10px rgba(255, 133, 162, 0.2)",
+        border: "2px solid #FFD6E4",
       };
     }
     // 默认H2样式
     return {
-      fontSize: customSize ? `${customSize}px` : "17px",
+      fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
       fontWeight: 600,
       color: selectedTemplate.headingColor,
       margin: "18px 0 10px",
@@ -864,45 +1691,102 @@ export default function EditorPage() {
 
   // 获取标题样式（文章大标题）
   const getTitleStyle = (): CSSProperties => {
+    const size = typeFontSizes.h1;
+    if (selectedTemplate.id === "byte-green") {
+      return {
+        display: "table",
+        padding: "0.5em 2em",
+        margin: "1.5em auto 1em",
+        color: "#1d2129",
+        fontSize: `${size}px`,
+        fontWeight: 600,
+        textAlign: "center",
+        background: "linear-gradient(90deg, #2ea250, #09fc3c)",
+        backgroundSize: "100% 35%",
+        backgroundPosition: "bottom 0.15em center",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+    if (selectedTemplate.id === "cute-pink") {
+      return {
+        display: "table",
+        padding: "0.8em 2em",
+        margin: "2em auto 1.5em",
+        color: "#FFFFFF",
+        fontSize: `${size}px`,
+        fontWeight: "bold",
+        textAlign: "center",
+        letterSpacing: "0.1em",
+        position: "relative",
+        lineHeight: 1.5,
+        width: "fit-content",
+        maxWidth: "90%",
+        background: "linear-gradient(135deg, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB, #FF85A2)",
+        borderRadius: "20px",
+        boxShadow: "0 5px 15px rgba(255, 133, 162, 0.3)",
+        border: "3px solid #FFE6EE",
+      };
+    }
     if (selectedTemplate.h1Background) {
       return {
-        fontSize: "18px",
+        fontSize: `${size}px`,
         fontWeight: 600,
         color: selectedTemplate.h1TextColor || "#ffffff",
         padding: "4px 12px",
         margin: "20px 0 12px",
         background: selectedTemplate.h1Background,
-        borderLeft: `4px solid ${selectedTemplate.primaryColor}`,
+        borderLeft: `4px solid ${selectedTemplate.h1Color || selectedTemplate.primaryColor}`,
       };
     }
     // 默认标题样式
     return {
-      fontSize: "20px",
+      fontSize: `${size}px`,
       fontWeight: 700,
-      color: selectedTemplate.headingColor,
+      color: selectedTemplate.h1Color || selectedTemplate.headingColor,
       margin: "20px 0 12px",
       paddingLeft: "10px",
-      borderLeft: `4px solid ${selectedTemplate.headingColor}`,
+      borderLeft: `4px solid ${selectedTemplate.h1Color || selectedTemplate.headingColor}`,
     };
   };
 
   // 获取H3样式
   const getH3Style = (blockIndex: number): CSSProperties => {
     const customSize = blockCustomStyles[blockIndex]?.fontSize;
+    const typeSize = typeFontSizes.h3;
     if (selectedTemplate.id === "byte-green") {
-      // 字节绿H3: 深色文字（原来的H2样式）
       return {
-        fontSize: customSize ? `${customSize}px` : "15px",
-        fontWeight: 500,
-        color: selectedTemplate.subheadingColor, // 深色
-        margin: "16px 0 8px",
-        paddingLeft: "8px",
-        borderLeft: `3px solid ${selectedTemplate.subheadingColor}`,
+        padding: "0.2em 0",
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        color: "#1d2129",
+        margin: "0.8em 0 0.3em",
+        fontWeight: 600,
+        display: "inline-block",
+        background: "linear-gradient(90deg, #2ea250, #09fc3c)",
+        backgroundSize: "100% 1.8px",
+        backgroundPosition: "bottom left",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+    if (selectedTemplate.id === "cute-pink") {
+      return {
+        padding: "0.5em 1em 0.5em 2.2em",
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        lineHeight: 1.6,
+        margin: "2em 0 0.75em",
+        fontWeight: 600,
+        position: "relative",
+        color: "#FFFFFF",
+        background: "linear-gradient(90deg, #FFB5D9, #E8B4D5, #FFDFD3)",
+        borderRadius: "15px",
+        boxShadow: "0 3px 8px rgba(255, 133, 162, 0.2)",
+        border: "2px solid #FFE6EE",
+        display: "block",
+        width: "fit-content",
       };
     }
     // 默认H3样式
     return {
-      fontSize: customSize ? `${customSize}px` : "15px",
+      fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
       fontWeight: 500,
       color: selectedTemplate.subheadingColor,
       margin: "14px 0 8px",
@@ -913,218 +1797,254 @@ export default function EditorPage() {
 
   // 获取段落样式（支持局部字号和行高）
   const getParagraphStyle = (blockIndex: number): CSSProperties => {
+    if (!isFormattedMode) {
+      return {
+        fontSize: "16px",
+        margin: "8px 0",
+        textAlign: "left",
+        textIndent: 0,
+        lineHeight: 1.7,
+        color: "#333",
+      };
+    }
+
     const customSize = blockCustomStyles[blockIndex]?.fontSize;
     const customHeight = blockCustomStyles[blockIndex]?.lineHeight;
+    const typeSize = typeFontSizes.paragraph;
+    if (selectedTemplate.id === "byte-green") {
+      return {
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        margin: "0.8em 0",
+        letterSpacing: "0",
+        color: "#4e5969",
+        textAlign: "justify" as const,
+        lineHeight: customHeight || 1.8,
+      };
+    }
+    if (selectedTemplate.id === "cute-pink") {
+      return {
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        margin: "1em 0",
+        letterSpacing: "0.05em",
+        color: "#555",
+        textAlign: "justify" as const,
+        lineHeight: customHeight || 1.8,
+        textIndent: 0,
+      };
+    }
     return {
-      fontSize: customSize ? `${customSize}px` : "15px",
+      fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
       margin: "10px 0",
       textAlign: "justify" as const,
-      textIndent: "2em",
+      textIndent: 0,
       lineHeight: customHeight || 1.8,
       color: selectedTemplate.textColor,
     };
   };
 
   // 获取引用样式
-  const getQuoteStyle = (): CSSProperties => ({
-    fontStyle: "normal",
-    padding: "10px 15px",
-    borderLeft: `4px solid ${selectedTemplate.quoteBorder}`,
-    backgroundColor: selectedTemplate.quoteBackground,
-    margin: "12px 0",
-    color: selectedTemplate.textColor,
-  });
+  const getQuoteStyle = (blockIndex?: number): CSSProperties => {
+    const customSize = blockIndex !== undefined ? blockCustomStyles[blockIndex]?.fontSize : undefined;
+    const customHeight = blockIndex !== undefined ? blockCustomStyles[blockIndex]?.lineHeight : undefined;
+    const typeSize = typeFontSizes.quote;
+    if (selectedTemplate.id === "byte-green") {
+      return {
+        fontStyle: "normal",
+        padding: "0.8em 0.8em 0.8em 1.5em",
+        borderLeft: "3px solid #2ea250",
+        borderRadius: "4px",
+        color: "#4e5969",
+        background: "linear-gradient(90deg, rgba(46, 162, 80, 0.05), rgba(9, 252, 60, 0.05))",
+        margin: "0.8em 0",
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        lineHeight: customHeight || 1.8,
+      };
+    }
+    if (selectedTemplate.id === "cute-pink") {
+      return {
+        fontStyle: "normal",
+        padding: "0.5em 1em 0.5em 2em",
+        borderRadius: "10px",
+        color: "#666",
+        background: "rgba(255, 245, 249, 0.8)",
+        margin: "1.2em 0",
+        position: "relative",
+        borderLeft: "5px solid #FFB5D9",
+        fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+        lineHeight: customHeight || 1.8,
+      };
+    }
+    return {
+      fontStyle: "normal",
+      padding: "10px 15px",
+      borderLeft: `4px solid ${selectedTemplate.quoteBorder}`,
+      backgroundColor: selectedTemplate.quoteBackground,
+      margin: "12px 0",
+      color: selectedTemplate.textColor,
+      fontSize: customSize ? `${customSize}px` : `${typeSize}px`,
+      lineHeight: customHeight || 1.8,
+    };
+  };
 
   // 渲染预览内容
   const renderPreview = () => {
     if (!parsedArticle) {
       return (
         <div style={{ color: "#999", textAlign: "center", padding: "40px" }}>
-          请输入文章内容<br/>
-          <span style={{ fontSize: "12px", color: "#bbb" }}>点击下方模板可切换风格 | 选中内容块可编辑</span>
+          请输入文章内容
         </div>
       );
     }
 
     const elements: React.ReactNode[] = [];
 
-    // 标题
-    elements.push(
-      <h1
-        key="title"
-        contentEditable
-        suppressContentEditableWarning
-        onBlur={(e) => {
-          const newTitle = e.currentTarget.textContent || "";
-          if (parsedArticle.title !== newTitle) {
-            const newArticle = { ...parsedArticle, title: newTitle };
-            saveToHistory(newArticle);
-            setParsedArticle(newArticle);
-          }
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          setSelectedBlockIndex(-1);
-        }}
-        style={{
-          ...getTitleStyle(),
-          cursor: "text",
-          outline: "none",
-        }}
-      >
-        {parsedArticle.title}
-      </h1>
-    );
+    // 标题。纯粘贴模式不生成标题，避免未点击排版时出现标题样式。
+    if (parsedArticle.title.trim()) {
+      elements.push(
+        <div key="title-wrapper" style={selectedTemplate.id === "cute-pink" ? { position: "relative", margin: "2em auto 1.5em", width: "80%" } : {}}>
+          {selectedTemplate.id === "cute-pink" && <span contentEditable={false} style={{ position: "absolute", top: "50%", left: "-1.2em", transform: "translateY(-50%)", fontSize: "1.2em", color: "#FFB5D9", zIndex: 2 }}>★</span>}
+          <h1
+            data-preview-title="true"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (hasActivePreviewSelection()) {
+                saveCurrentSelection();
+                return;
+              }
+              setSelectedBlockIndex(-1);
+            }}
+            style={selectedTemplate.id === "cute-pink" ? { ...getTitleStyle(), margin: 0, width: "100%" } : { ...getTitleStyle(), cursor: "text", outline: "none" }}
+            dangerouslySetInnerHTML={{ __html: parsedArticle.title }}
+          />
+          {selectedTemplate.id === "cute-pink" && <span contentEditable={false} style={{ position: "absolute", top: "50%", right: "-1.2em", transform: "translateY(-50%)", fontSize: "1.2em", color: "#FFB5D9", zIndex: 2 }}>★</span>}
+        </div>
+      );
+    }
 
-    // 内容块 - 直接使用contentEditable在原位置编辑
+    // 内容块由外层统一 contentEditable 承载，支持跨段落选择和内联样式编辑。
     parsedArticle.blocks.forEach((block, i) => {
-      switch (block.type) {
+      // 添加拖放区域（上方）
+      elements.push(
+        <div
+          key={`drop-before-${i}`}
+          contentEditable={false}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.currentTarget.style.background = "rgba(46, 162, 80, 0.1)";
+            e.currentTarget.style.borderColor = selectedTemplate.primaryColor;
+          }}
+          onDragLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.borderColor = "transparent";
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.borderColor = "transparent";
+
+            const data = e.dataTransfer.getData("text/plain");
+            if (data === "new-image" && e.dataTransfer.getData("image-url")) {
+              const imageUrl = e.dataTransfer.getData("image-url");
+              const newBlocks = [...parsedArticle.blocks];
+              newBlocks.splice(i, 0, { type: "image" as const, content: imageUrl });
+              updateArticle({ ...parsedArticle, blocks: newBlocks });
+            }
+          }}
+          style={{
+            height: "8px",
+            margin: "2px 0",
+            borderRadius: "4px",
+            border: "2px dashed transparent",
+            transition: "all 0.2s",
+          }}
+        />
+      );
+
+      const displayType = getDisplayBlockType(block.type);
+
+      switch (displayType) {
         case "h1":
           elements.push(
-            <h1
-              key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                if (block.content !== newContent) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], content: newContent };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
-              style={getH1Style()}
-            >
-              {block.content}
-            </h1>
+            <div key={i} style={selectedTemplate.id === "cute-pink" ? { position: "relative", margin: "2em auto 1.5em", width: "80%" } : {}}>
+              {selectedTemplate.id === "cute-pink" && <span contentEditable={false} style={{ position: "absolute", top: "50%", left: "-1.2em", transform: "translateY(-50%)", fontSize: "1.2em", color: "#FFB5D9", zIndex: 2 }}>★</span>}
+              <h1
+                data-block-index={i}
+                onClick={(e) => handlePreviewBlockClick(i, e)}
+                style={selectedTemplate.id === "cute-pink" ? { ...getH1Style(), margin: 0, width: "100%" } : getH1Style()}
+                dangerouslySetInnerHTML={{ __html: block.content }}
+              />
+              {selectedTemplate.id === "cute-pink" && <span contentEditable={false} style={{ position: "absolute", top: "50%", right: "-1.2em", transform: "translateY(-50%)", fontSize: "1.2em", color: "#FFB5D9", zIndex: 2 }}>★</span>}
+            </div>
           );
           break;
         case "h2":
           elements.push(
-            <h2
-              key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                if (block.content !== newContent) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], content: newContent };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
-              style={getH2Style(i)}
-            >
-              {block.content}
-            </h2>
+            <div key={i} style={selectedTemplate.id === "cute-pink" ? { position: "relative", margin: "2.5em auto 1.8em", width: "70%" } : {}}>
+              {selectedTemplate.id === "cute-pink" && (
+                <span contentEditable={false} style={{ position: "absolute", top: "-1.1em", right: "0.6em", fontSize: "1.1em", color: "#FF85A2", zIndex: 2, lineHeight: 1 }}>✧</span>
+              )}
+              <h2
+                data-block-index={i}
+                onClick={(e) => handlePreviewBlockClick(i, e)}
+                style={selectedTemplate.id === "cute-pink" ? { ...getH2Style(i), margin: 0, width: "100%" } : getH2Style(i)}
+                dangerouslySetInnerHTML={{ __html: block.content }}
+              />
+            </div>
           );
           break;
         case "h3":
           elements.push(
-            <h3
-              key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                if (block.content !== newContent) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], content: newContent };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
-              style={getH3Style(i)}
-            >
-              {block.content}
-            </h3>
+            <div key={i} style={selectedTemplate.id === "cute-pink" ? { position: "relative", margin: "2em 0 0.75em", width: "fit-content" } : {}}>
+              {selectedTemplate.id === "cute-pink" && <span contentEditable={false} style={{ position: "absolute", left: "-1em", top: "50%", transform: "translateY(-50%)", fontSize: "1.1em", zIndex: 2, color: "#FF85A2", lineHeight: 1 }}>✦</span>}
+              <h3
+                data-block-index={i}
+                onClick={(e) => handlePreviewBlockClick(i, e)}
+                style={selectedTemplate.id === "cute-pink" ? { ...getH3Style(i), margin: 0, width: "100%" } : getH3Style(i)}
+                dangerouslySetInnerHTML={{ __html: block.content }}
+              />
+            </div>
           );
           break;
         case "paragraph":
           elements.push(
             <p
               key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                if (block.content !== newContent) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], content: newContent };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
+              data-block-index={i}
+              onClick={(e) => handlePreviewBlockClick(i, e)}
               style={getParagraphStyle(i)}
-            >
-              {block.content}
-            </p>
+              dangerouslySetInnerHTML={{ __html: block.content }}
+            />
           );
           break;
         case "quote":
           elements.push(
-            <blockquote
-              key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                if (block.content !== newContent) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], content: newContent };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
-              style={getQuoteStyle()}
-            >
-              {block.content}
-            </blockquote>
+            <div key={i} style={selectedTemplate.id === "cute-pink" ? { position: "relative" } : {}}>
+              {selectedTemplate.id === "cute-pink" && <span contentEditable={false} style={{ position: "absolute", left: "0.5em", top: "-0.2em", fontSize: "2em", color: "#FF85A2", fontFamily: "Georgia, serif", zIndex: 2, lineHeight: 1 }}>❝</span>}
+              <blockquote
+                data-block-index={i}
+                onClick={(e) => handlePreviewBlockClick(i, e)}
+                style={getQuoteStyle(i)}
+                dangerouslySetInnerHTML={{ __html: block.content }}
+              />
+            </div>
           );
           break;
         case "ul":
           elements.push(
             <ul
               key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                const items = newContent.split("\n").filter(line => line.trim());
-                if (JSON.stringify(block.items) !== JSON.stringify(items)) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], items };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
-              style={{
+              data-block-index={i}
+              onClick={(e) => handlePreviewBlockClick(i, e)}
+              style={selectedTemplate.id === "byte-green" ? {
+                paddingLeft: "1.2em",
+                margin: "0.8em 0",
+                color: "#4e5969",
+                listStyleType: "none",
+              } : selectedTemplate.id === "cute-pink" ? {
+                paddingLeft: "2em",
+                margin: "1em 0",
+                listStyleType: "none",
+              } : {
                 paddingLeft: "24px",
                 margin: "8px 0",
                 color: selectedTemplate.textColor,
@@ -1132,9 +2052,15 @@ export default function EditorPage() {
               }}
             >
               {(block.items || []).map((item, j) => (
-                <li key={j} style={{ margin: "8px 0", lineHeight: 1.6, position: "relative", paddingLeft: "16px" }}>
-                  <span style={{ position: "absolute", left: "0", color: selectedTemplate.headingColor || "#2ea250", fontWeight: "bold" }}>•</span>
-                  {item}
+                <li key={j} style={selectedTemplate.id === "byte-green" ? { margin: "0.3em 0", lineHeight: blockCustomStyles[i]?.lineHeight || 1.8, fontSize: blockCustomStyles[i]?.fontSize ? `${blockCustomStyles[i].fontSize}px` : `${typeFontSizes.list}px`, position: "relative", paddingLeft: "0.8em" } : selectedTemplate.id === "cute-pink" ? { margin: "0.5em 0", lineHeight: blockCustomStyles[i]?.lineHeight || 1.8, fontSize: blockCustomStyles[i]?.fontSize ? `${blockCustomStyles[i].fontSize}px` : `${typeFontSizes.list}px`, position: "relative" } : { margin: "8px 0", lineHeight: blockCustomStyles[i]?.lineHeight || 1.8, fontSize: blockCustomStyles[i]?.fontSize ? `${blockCustomStyles[i].fontSize}px` : `${typeFontSizes.list}px`, position: "relative", paddingLeft: "16px" }}>
+                  {selectedTemplate.id === "byte-green" ? (
+                    <span contentEditable={false} style={{ position: "absolute", left: 0, top: "0.65em", width: "5px", height: "5px", borderRadius: "50%", background: "radial-gradient(circle, #09fc3c, #2ea250)", opacity: j % 2 !== 0 ? 0.7 : 1 }}></span>
+                  ) : selectedTemplate.id === "cute-pink" ? (
+                    <span contentEditable={false} style={{ position: "absolute", left: "-1.5em", fontSize: "0.9em", color: "#FF85A2" }}>♡</span>
+                  ) : (
+                    <span contentEditable={false} style={{ position: "absolute", left: "0", color: selectedTemplate.headingColor || "#2ea250", fontWeight: "bold" }}>•</span>
+                  )}
+                  <span data-list-content="true" dangerouslySetInnerHTML={{ __html: item }} />
                 </li>
               ))}
             </ul>
@@ -1144,23 +2070,20 @@ export default function EditorPage() {
           elements.push(
             <ol
               key={i}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(e) => {
-                const newContent = e.currentTarget.textContent || "";
-                const items = newContent.split("\n").filter(line => line.trim());
-                if (JSON.stringify(block.items) !== JSON.stringify(items)) {
-                  const newBlocks = [...parsedArticle.blocks];
-                  newBlocks[i] = { ...newBlocks[i], items };
-                  saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                  setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
-              style={{
+              data-block-index={i}
+              onClick={(e) => handlePreviewBlockClick(i, e)}
+              style={selectedTemplate.id === "byte-green" ? {
+                paddingLeft: "1.2em",
+                margin: "0.8em 0",
+                color: "#4e5969",
+                listStyleType: "none",
+                counterReset: "item",
+              } : selectedTemplate.id === "cute-pink" ? {
+                paddingLeft: "2em",
+                margin: "1em 0",
+                listStyleType: "none",
+                counterReset: "item",
+              } : {
                 paddingLeft: "0",
                 margin: "8px 0",
                 color: selectedTemplate.textColor,
@@ -1169,11 +2092,15 @@ export default function EditorPage() {
               }}
             >
               {(block.items || []).map((item, j) => (
-                <li key={j} style={{ margin: "8px 0", lineHeight: 1.6, position: "relative", paddingLeft: "32px", counterIncrement: "item" }}>
-                  <span
-                    style={{ position: "absolute", left: "0", width: "22px", height: "22px", lineHeight: "22px", textAlign: "center", background: selectedTemplate.headingColor || "#2ea250", color: "#fff", borderRadius: "50%", fontSize: "12px", fontWeight: "bold" }}
-                  >{j + 1}</span>
-                  {item}
+                <li key={j} style={selectedTemplate.id === "byte-green" ? { margin: "0.3em 0", lineHeight: blockCustomStyles[i]?.lineHeight || 1.8, fontSize: blockCustomStyles[i]?.fontSize ? `${blockCustomStyles[i].fontSize}px` : `${typeFontSizes.list}px`, position: "relative", paddingLeft: "0.5em", counterIncrement: "item" } : selectedTemplate.id === "cute-pink" ? { margin: "0.5em 0", lineHeight: blockCustomStyles[i]?.lineHeight || 1.8, fontSize: blockCustomStyles[i]?.fontSize ? `${blockCustomStyles[i].fontSize}px` : `${typeFontSizes.list}px`, position: "relative", listStyle: "none", counterIncrement: "item" } : { margin: "8px 0", lineHeight: blockCustomStyles[i]?.lineHeight || 1.8, fontSize: blockCustomStyles[i]?.fontSize ? `${blockCustomStyles[i].fontSize}px` : `${typeFontSizes.list}px`, position: "relative", paddingLeft: "32px", counterIncrement: "item" }}>
+                  {selectedTemplate.id === "byte-green" ? (
+                    <span contentEditable={false} style={{ position: "absolute", left: "-1em", top: "0.15em", color: "#2ea250", fontWeight: "bold", fontStyle: "italic" }}>{j + 1}.</span>
+                  ) : selectedTemplate.id === "cute-pink" ? (
+                    <span contentEditable={false} style={{ position: "absolute", left: "-2em", top: "0.2em", color: "#FFFFFF", background: "linear-gradient(135deg, #FFB5D9, #E8B4D5)", width: "1.5em", height: "1.5em", borderRadius: "50%", textAlign: "center", lineHeight: "1.5em", fontWeight: "bold" }}>{j + 1}</span>
+                  ) : (
+                    <span contentEditable={false} style={{ position: "absolute", left: "0", width: "22px", height: "22px", lineHeight: "22px", textAlign: "center", background: selectedTemplate.headingColor || "#2ea250", color: "#fff", borderRadius: "50%", fontSize: "12px", fontWeight: "bold" }}>{j + 1}</span>
+                  )}
+                  <span data-list-content="true" dangerouslySetInnerHTML={{ __html: item }} />
                 </li>
               ))}
             </ol>
@@ -1184,10 +2111,7 @@ export default function EditorPage() {
           elements.push(
             <div
               key={i}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBlockIndex(i);
-              }}
+              onClick={(e) => handlePreviewBlockClick(i, e)}
               style={{
                 borderRadius: "8px",
                 overflow: "hidden",
@@ -1195,7 +2119,7 @@ export default function EditorPage() {
                 background: "#1e1e1e",
               }}
             >
-              <div style={{ background: "#2d2d2d", padding: "10px 12px", borderBottom: "1px solid #3c3c3c", display: "flex", alignItems: "center", gap: "8px" }}>
+              <div contentEditable={false} style={{ background: "#2d2d2d", padding: "10px 12px", borderBottom: "1px solid #3c3c3c", display: "flex", alignItems: "center", gap: "8px" }}>
                 <div style={{ display: "flex", gap: "6px" }}>
                   <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#ff5f57", display: "inline-block" }} />
                   <span style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#febc2e", display: "inline-block" }} />
@@ -1210,17 +2134,7 @@ export default function EditorPage() {
                 </div>
               </div>
               <pre
-                contentEditable
-                suppressContentEditableWarning
-                onBlur={(e) => {
-                  const newContent = e.currentTarget.textContent || "";
-                  if (block.content !== newContent) {
-                    const newBlocks = [...parsedArticle.blocks];
-                    newBlocks[i] = { ...newBlocks[i], content: newContent };
-                    saveToHistory({ ...parsedArticle, blocks: newBlocks });
-                    setParsedArticle({ ...parsedArticle, blocks: newBlocks });
-                  }
-                }}
+                data-block-index={i}
                 style={{
                   margin: 0,
                   padding: "12px",
@@ -1240,112 +2154,353 @@ export default function EditorPage() {
             </div>
           );
           break;
+        case "image":
+          elements.push(
+            <div
+              key={i}
+              contentEditable={false}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData("text/plain", `image:${i}`);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              style={{
+                margin: "12px 0",
+                borderRadius: "8px",
+                overflow: "hidden",
+                border: selectedBlockIndex === i ? `2px solid ${selectedTemplate.primaryColor}` : "2px solid transparent",
+                cursor: "grab",
+                position: "relative",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedBlockIndex(i);
+              }}
+            >
+              <img
+                src={block.content}
+                style={{
+                  maxWidth: "100%",
+                  height: "auto",
+                  display: "block",
+                  borderRadius: "8px",
+                  border: `3px solid ${selectedTemplate.primaryColor}`,
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                }}
+                alt="文章图片"
+              />
+              {selectedBlockIndex === i && (
+                <div style={{
+                  position: "absolute",
+                  top: "8px",
+                  right: "8px",
+                  display: "flex",
+                  gap: "4px",
+                }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteBlock(i);
+                    }}
+                    style={{
+                      background: "rgba(220, 38, 38, 0.9)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      padding: "4px 8px",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                    }}
+                  >🗑️</button>
+                </div>
+              )}
+            </div>
+          );
+          break;
+        case "table":
+          elements.push(
+            <div
+              key={i}
+              contentEditable={false}
+              onClick={(e) => handlePreviewBlockClick(i, e)}
+              style={{
+                overflowX: "auto",
+                margin: "12px 0",
+                border: selectedBlockIndex === i ? `1px solid ${selectedTemplate.primaryColor}` : "1px solid transparent",
+                borderRadius: "6px",
+              }}
+              dangerouslySetInnerHTML={{ __html: block.content }}
+            />
+          );
+          break;
         case "hr":
           elements.push(
-            <hr
-              key={i}
-              style={{
-                height: "1px",
-                border: "none",
-                margin: "20px 0",
-                background: selectedTemplate.quoteBorder,
-              }}
-            />
+            <div key={i} contentEditable={false} style={selectedTemplate.id === "byte-green" ? { margin: "1.8em 0" } : selectedTemplate.id === "cute-pink" ? { margin: "2.5em auto", position: "relative" } : {}}>
+              {selectedTemplate.id === "cute-pink" && (
+                <div style={{ position: "relative", height: 0, top: "-18px" }}>
+                  <span style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", fontSize: "1.4em", zIndex: 2, color: "#FF85A2" }}>✦</span>
+                </div>
+              )}
+              <hr
+                style={selectedTemplate.id === "byte-green" ? {
+                  height: "1px",
+                  border: "none",
+                  margin: 0,
+                  background: "linear-gradient(to right, rgba(46, 162, 80, 0), rgba(46, 162, 80, 0.5), rgba(9, 252, 60, 0.5), rgba(9, 252, 60, 0))",
+                  position: "relative",
+                } : selectedTemplate.id === "cute-pink" ? {
+                  height: "6px",
+                  border: "none",
+                  margin: 0,
+                  background: "linear-gradient(to right, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB, #FF85A2)",
+                  borderRadius: "3px",
+                  position: "relative",
+                } : {
+                  height: "1px",
+                  border: "none",
+                  margin: "20px 0",
+                  background: selectedTemplate.quoteBorder,
+                }}
+              />
+              {selectedTemplate.id === "byte-green" && (
+                <div style={{ position: "relative", height: 0, top: "-1px" }}>
+                  <span style={{ position: "absolute", left: "50%", top: 0, transform: "translate(-50%, -50%)", width: "5px", height: "5px", background: "radial-gradient(circle, #09fc3c, #2ea250)", borderRadius: "50%", boxShadow: "-18px 0 0 rgba(46, 162, 80, 0.5), 18px 0 0 rgba(9, 252, 60, 0.5)" }}></span>
+                </div>
+              )}
+            </div>
+          );
+          break;
+        case "hr":
+          elements.push(
+            <div key={i} style={selectedTemplate.id === "byte-green" ? { margin: "1.8em 0" } : selectedTemplate.id === "cute-pink" ? { margin: "2.5em auto", position: "relative" } : {}}>
+              {selectedTemplate.id === "cute-pink" && (
+                <div style={{ position: "relative", height: 0, top: "-18px" }}>
+                  <span style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", fontSize: "1.4em", zIndex: 2, color: "#FF85A2" }}>✦</span>
+                </div>
+              )}
+              <hr
+                style={selectedTemplate.id === "byte-green" ? {
+                  height: "1px",
+                  border: "none",
+                  margin: 0,
+                  background: "linear-gradient(to right, rgba(46, 162, 80, 0), rgba(46, 162, 80, 0.5), rgba(9, 252, 60, 0.5), rgba(9, 252, 60, 0))",
+                  position: "relative",
+                } : selectedTemplate.id === "cute-pink" ? {
+                  height: "6px",
+                  border: "none",
+                  margin: 0,
+                  background: "linear-gradient(to right, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB, #FF85A2)",
+                  borderRadius: "3px",
+                  position: "relative",
+                } : {
+                  height: "1px",
+                  border: "none",
+                  margin: "20px 0",
+                  background: selectedTemplate.quoteBorder,
+                }}
+              />
+              {selectedTemplate.id === "byte-green" && (
+                <div style={{ position: "relative", height: 0, top: "-1px" }}>
+                  <span style={{ position: "absolute", left: "50%", top: 0, transform: "translate(-50%, -50%)", width: "5px", height: "5px", background: "radial-gradient(circle, #09fc3c, #2ea250)", borderRadius: "50%", boxShadow: "-18px 0 0 rgba(46, 162, 80, 0.5), 18px 0 0 rgba(9, 252, 60, 0.5)" }}></span>
+                </div>
+              )}
+            </div>
           );
           break;
       }
     });
 
-    // 渲染上传的图片
-    if (uploadedImages.length > 0) {
-      elements.push(
-        <div key="images-section" style={{ marginTop: "20px" }}>
-          <div style={{ fontSize: "13px", color: "#666", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-            <span>📷 图片 ({uploadedImages.length})</span>
-            <label style={{ cursor: "pointer", padding: "4px 12px", background: selectedTemplate.primaryColor, color: "#fff", borderRadius: "12px", fontSize: "12px" }}>
-              + 添加图片
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={handleImageUpload}
-                style={{ display: "none" }}
-              />
-            </label>
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
-            {uploadedImages.map((img, idx) => (
-              <div
-                key={idx}
-                draggable
-                onDragStart={(e) => handleImageDragStart(e, idx)}
-                onDragOver={(e) => handleImageDragOver(e, idx)}
-                onDrop={(e) => handleImageDrop(e, idx)}
-                onDragEnd={handleImageDragEnd}
-                style={{
-                  position: "relative",
-                  maxWidth: "200px",
-                  borderRadius: "8px",
-                  overflow: "hidden",
-                  border: `3px solid ${dragImageIndex === idx ? "#ff6b6b" : dropImageIndex === idx ? "#51cf66" : selectedTemplate.primaryColor}`,
-                  boxShadow: dragImageIndex === idx ? "0 4px 16px rgba(255,107,107,0.4)" : "0 2px 8px rgba(0,0,0,0.1)",
-                  opacity: dragImageIndex === idx ? 0.5 : 1,
-                  transform: dragImageIndex === idx ? "scale(0.95)" : "scale(1)",
-                  transition: "all 0.2s ease",
-                  cursor: "grab",
-                }}
-              >
-                <img
-                  src={img}
-                  alt={`上传图片 ${idx + 1}`}
-                  style={{
-                    width: "100%",
-                    height: "auto",
-                    display: "block",
-                    pointerEvents: "none",
-                  }}
-                />
-                <div style={{
-                  position: "absolute",
-                  bottom: "4px",
-                  left: "4px",
-                  background: "rgba(0,0,0,0.5)",
-                  color: "#fff",
-                  fontSize: "10px",
-                  padding: "2px 6px",
-                  borderRadius: "8px",
-                }}>
-                  ⋮⋮ 拖拽排序
-                </div>
-                <button
-                  onClick={() => handleDeleteImage(idx)}
-                  style={{
-                    position: "absolute",
-                    top: "4px",
-                    right: "4px",
-                    width: "24px",
-                    height: "24px",
-                    borderRadius: "50%",
-                    background: "rgba(0,0,0,0.6)",
-                    color: "#fff",
-                    border: "none",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    lineHeight: "24px",
-                    textAlign: "center",
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
     return elements;
   };
+
+  const renderFontSizeControl = () => (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setShowFontSizeMenu(!showFontSizeMenu)}
+        style={styles.toolbarBtn}
+      >
+        ⚙️ 字号调整
+      </button>
+      {showFontSizeMenu && (
+        <div style={{
+          position: "absolute",
+          top: "100%",
+          right: 0,
+          marginTop: "8px",
+          background: "white",
+          border: "1px solid #e0e7ff",
+          borderRadius: "8px",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+          padding: "16px",
+          width: "280px",
+          zIndex: 200,
+        }}>
+          <div style={{ marginBottom: "12px", fontWeight: "bold", fontSize: "14px", color: "#333" }}>字号调整</div>
+
+          <div style={{ display: "flex", gap: "12px" }}>
+            <div style={{ width: "100px", display: "flex", flexDirection: "column", gap: "4px" }}>
+              {[
+                { id: "h1", label: "一级标题" },
+                { id: "h2", label: "二级标题" },
+                { id: "h3", label: "三级标题" },
+                { id: "paragraph", label: "正文" },
+                { id: "quote", label: "引用" },
+                { id: "list", label: "列表" },
+              ].map(type => (
+                <div
+                  key={type.id}
+                  onClick={() => setActiveFontType(type.id)}
+                  style={{
+                    padding: "6px 8px",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    borderRadius: "4px",
+                    backgroundColor: activeFontType === type.id ? "#e8f0fe" : "transparent",
+                    color: activeFontType === type.id ? "#1a73e8" : "#666",
+                    fontWeight: activeFontType === type.id ? "bold" : "normal"
+                  }}
+                >
+                  {type.label}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ flex: 1, borderLeft: "1px solid #eee", paddingLeft: "12px", display: "flex", flexWrap: "wrap", gap: "6px", alignContent: "flex-start" }}>
+              {[12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 26, 28].map(size => (
+                <button
+                  key={size}
+                  onClick={() => setTypeFontSizes(prev => ({ ...prev, [activeFontType]: size }))}
+                  style={{
+                    padding: "4px 8px",
+                    fontSize: "12px",
+                    border: "1px solid",
+                    borderColor: typeFontSizes[activeFontType] === size ? "#1a73e8" : "#ddd",
+                    backgroundColor: typeFontSizes[activeFontType] === size ? "#e8f0fe" : "#fff",
+                    color: typeFontSizes[activeFontType] === size ? "#1a73e8" : "#333",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    minWidth: "36px"
+                  }}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderTextFormatControls = () => (
+    <div style={styles.toolbarGroup}>
+      <span style={{ fontSize: "12px", color: "#666", fontWeight: 400 }}>文字格式</span>
+      <button
+        onMouseDown={(e) => { e.preventDefault(); applyTextCommand("bold"); }}
+        style={{ ...styles.toolbarBtn, fontWeight: 700 }}
+        title="加粗"
+      >B</button>
+      <button
+        onMouseDown={(e) => { e.preventDefault(); applyTextCommand("italic"); }}
+        style={{ ...styles.toolbarBtn, fontStyle: "italic" }}
+        title="斜体"
+      >I</button>
+      <button
+        onMouseDown={(e) => { e.preventDefault(); applyTextCommand("underline"); }}
+        style={{ ...styles.toolbarBtn, textDecoration: "underline" }}
+        title="下划线"
+      >U</button>
+      <button
+        onMouseDown={(e) => {
+          e.preventDefault();
+          applyTextCommand("foreColor", selectedTemplate.headingColor);
+        }}
+        style={{ ...styles.toolbarBtn, color: selectedTemplate.headingColor }}
+        title="文字颜色"
+      >🎨</button>
+      <button
+        onMouseDown={(e) => { e.preventDefault(); applyTextCommand("removeFormat"); }}
+        style={styles.toolbarBtn}
+        title="清除文字格式"
+      >重置</button>
+    </div>
+  );
+
+  const renderBackgroundControl = () => (
+    <>
+      <button
+        onClick={() => setIncludeBackgroundColor(prev => !prev)}
+        style={{
+          ...styles.toolbarBtn,
+          backgroundColor: includeBackgroundColor ? selectedTemplate.backgroundColor : "#FFF",
+          borderColor: includeBackgroundColor ? selectedTemplate.primaryColor : "#E0E0E0",
+          color: includeBackgroundColor ? selectedTemplate.textColor : "#333",
+          fontWeight: includeBackgroundColor ? 600 : 400,
+        }}
+        title="切换文章背景颜色"
+      >
+        背景{includeBackgroundColor ? "开" : "关"}
+      </button>
+    </>
+  );
+
+  const renderTypographyPreferenceControl = () => (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setShowTypographyMenu(!showTypographyMenu)}
+        style={styles.toolbarBtn}
+      >
+        自定义
+      </button>
+      {showTypographyMenu && (
+        <div style={{
+          position: "absolute",
+          top: "100%",
+          right: 0,
+          marginTop: "8px",
+          background: "white",
+          border: "1px solid #e0e7ff",
+          borderRadius: "8px",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+          padding: "14px",
+          width: "240px",
+          zIndex: 200,
+        }}>
+          <div style={{ marginBottom: "10px", fontWeight: "bold", fontSize: "14px", color: "#333" }}>排版偏好</div>
+          {(["h1", "h2"] as HeadingLevel[]).map(level => (
+            <label
+              key={level}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "8px", fontSize: "13px", color: "#666" }}
+            >
+              <span>{level.toUpperCase()} 显示为</span>
+              <select
+                value={headingPreferences[level]}
+                onChange={(e) => setHeadingPreferences(prev => ({ ...prev, [level]: e.target.value as HeadingLevel }))}
+                style={{
+                  padding: "5px 8px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "13px",
+                  background: "#fff",
+                  color: "#333",
+                }}
+              >
+                {(["h1", "h2"] as HeadingLevel[]).map(option => (
+                  <option key={option} value={option}>{option.toUpperCase()}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+          <button
+            onClick={() => setHeadingPreferences({ h1: "h1", h2: "h2", h3: "h3" })}
+            style={{ ...styles.toolbarBtn, marginTop: "4px", width: "100%" }}
+          >
+            恢复默认
+          </button>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div style={styles.container}>
@@ -1417,25 +2572,36 @@ export default function EditorPage() {
             </div>
             <textarea
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder="粘贴文章内容..."
+              onChange={handleInputChange}
+              onPaste={handleInputPaste}
+              onSelect={(e) => {
+                const target = e.target as HTMLTextAreaElement;
+                setCursorPosition(target.selectionStart);
+              }}
+              onKeyUp={(e) => {
+                const target = e.target as HTMLTextAreaElement;
+                setCursorPosition(target.selectionStart);
+              }}
+              onClick={(e) => {
+                const target = e.target as HTMLTextAreaElement;
+                setCursorPosition(target.selectionStart);
+              }}
+              placeholder="粘贴文章内容，或点击上传图片按钮插入图片到光标位置..."
               style={styles.textarea}
             />
             {/* 图片上传按钮 */}
             <div style={{ padding: "8px 16px", borderTop: "1px solid #EEE", display: "flex", alignItems: "center", gap: "8px" }}>
-              <label style={{ cursor: "pointer", padding: "6px 14px", background: selectedTemplate.primaryColor, color: "#fff", borderRadius: "16px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}>
-                📷 上传图片
+              <label style={{ cursor: isUploading ? "not-allowed" : "pointer", padding: "6px 14px", background: isUploading ? "#ccc" : selectedTemplate.primaryColor, color: "#fff", borderRadius: "16px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}>
+                {isUploading ? "⏳ 上传中..." : "📷 上传图片"}
                 <input
                   type="file"
                   accept="image/*"
                   multiple
                   onChange={handleImageUpload}
                   style={{ display: "none" }}
+                  disabled={isUploading}
                 />
               </label>
-              {uploadedImages.length > 0 && (
-                <span style={{ fontSize: "12px", color: "#666" }}>已上传 {uploadedImages.length} 张图片</span>
-              )}
             </div>
           </div>
         </div>
@@ -1445,32 +2611,10 @@ export default function EditorPage() {
           <div style={{ ...styles.previewCard, padding: 0, display: "flex", flexDirection: "column", height: "100%" }}>
             {/* 顶部工具栏 - 固定在顶部 */}
             <div style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "10px 16px",
-              background: selectedBlockIndex !== null || editingTitle || hasSelection ? "#f0f7ff" : "#fafafa",
-              borderBottom: "1px solid #e0e7ff",
-              minHeight: "50px",
-              flexWrap: "wrap",
-              position: "sticky",
-              top: 0,
-              zIndex: 100,
-              flexShrink: 0
+              ...styles.previewToolbar,
+              background: selectedBlockIndex !== null || editingTitle ? "#f0f7ff" : "#fafafa",
             }}>
-              {/* 选中文字时的格式工具栏 */}
-              {hasSelection ? (
-                <>
-                  <span style={{ fontSize: "12px", color: "#1a73e8", fontWeight: 600 }}>选中文字</span>
-                  <span style={{ color: "#ddd", margin: "0 4px" }}>|</span>
-                  <button onClick={() => document.execCommand("bold")} style={{ ...styles.toolbarBtn, fontWeight: 700 }}>B</button>
-                  <button onClick={() => document.execCommand("italic")} style={{ ...styles.toolbarBtn, fontStyle: "italic" }}>I</button>
-                  <button onClick={() => document.execCommand("underline")} style={{ ...styles.toolbarBtn, textDecoration: "underline" }}>U</button>
-                  <span style={{ color: "#ddd", margin: "0 4px" }}>|</span>
-                  <button onClick={() => document.execCommand("foreColor", false, selectedTemplate.headingColor)} style={styles.toolbarBtn}>🎨</button>
-                  <button onClick={() => document.execCommand("removeFormat")} style={styles.toolbarBtn}>重置</button>
-                </>
-              ) : editingTitle ? (
+              {editingTitle ? (
                 /* 标题编辑模式 */
                 <input
                   value={titleText}
@@ -1505,75 +2649,108 @@ export default function EditorPage() {
                     outline: "none",
                   }}
                 />
-              ) : hasSelection ? (
-                /* 选中文字时的工具栏 */
-                <>
-                  <span style={{ fontSize: "12px", color: "#666", marginRight: "4px" }}>文字格式</span>
-                  <button
-                    onMouseDown={(e) => { e.preventDefault(); document.execCommand("bold"); }}
-                    style={{ ...styles.toolbarBtn, fontWeight: "bold" }}
-                  >B</button>
-                  <button
-                    onMouseDown={(e) => { e.preventDefault(); document.execCommand("italic"); }}
-                    style={{ ...styles.toolbarBtn, fontStyle: "italic" }}
-                  >I</button>
-                  <button
-                    onMouseDown={(e) => { e.preventDefault(); document.execCommand("underline"); }}
-                    style={{ ...styles.toolbarBtn, textDecoration: "underline" }}
-                  >U</button>
-                  <span style={{ color: "#ddd", margin: "0 4px" }}>|</span>
-                  <button onMouseDown={(e) => { e.preventDefault(); document.execCommand("foreColor", false, "#e166af"); }} style={styles.toolbarBtn}>🎨</button>
-                  <span style={{ color: "#ddd", margin: "0 4px" }}>|</span>
-                  <button onMouseDown={(e) => { e.preventDefault(); }} style={{ ...styles.toolbarBtn, color: "#666" }}>重置</button>
-                </>
-              ) : selectedBlockIndex !== null ? (
-                /* 选中块时的工具栏 */
-                <>
-                  <span style={{ fontSize: "12px", color: "#666", marginRight: "4px" }}>
-                    {parsedArticle?.blocks[selectedBlockIndex]?.type === "h1" ? "H1" :
-                     parsedArticle?.blocks[selectedBlockIndex]?.type === "h2" ? "H2" :
-                     parsedArticle?.blocks[selectedBlockIndex]?.type === "h3" ? "H3" :
-                     parsedArticle?.blocks[selectedBlockIndex]?.type === "quote" ? "引用" :
-                     parsedArticle?.blocks[selectedBlockIndex]?.type === "ul" || parsedArticle?.blocks[selectedBlockIndex]?.type === "ol" ? "列表" : "正文"}
-                  </span>
-                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "h1")} style={styles.toolbarBtn}>H1</button>
-                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "h2")} style={styles.toolbarBtn}>H2</button>
-                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "h3")} style={styles.toolbarBtn}>H3</button>
-                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "paragraph")} style={styles.toolbarBtn}>正文</button>
-                  <button onClick={() => handleConvertToQuote(selectedBlockIndex)} style={styles.toolbarBtn}>❝引用</button>
-                  {parsedArticle?.blocks[selectedBlockIndex]?.type === "ol" ? (
-                    <button onClick={() => handleChangeBlockType(selectedBlockIndex, "ul")} style={styles.toolbarBtn}>☰</button>
-                  ) : parsedArticle?.blocks[selectedBlockIndex]?.type === "ul" ? (
-                    <button onClick={() => handleChangeBlockType(selectedBlockIndex, "ol")} style={styles.toolbarBtn}>⑴</button>
-                  ) : (
-                    <>
-                      <button onClick={() => handleConvertToList(selectedBlockIndex, "ul")} style={styles.toolbarBtn}>☰</button>
-                      <button onClick={() => handleConvertToList(selectedBlockIndex, "ol")} style={styles.toolbarBtn}>⑴</button>
-                    </>
-                  )}
-                  <span style={{ color: "#ddd", margin: "0 4px" }}>|</span>
-                  <button onClick={() => handleStartEditBlock(selectedBlockIndex)} style={{ ...styles.toolbarBtn, background: "#e8f0fe", color: "#1a73e8" }}>✏️ 编辑</button>
-                  <button onClick={() => handleAddBlock(selectedBlockIndex, "above")} style={styles.toolbarBtn}>⤴</button>
-                  <button onClick={() => handleAddBlock(selectedBlockIndex, "below")} style={styles.toolbarBtn}>⤵</button>
-                  <button onClick={() => handleDeleteBlock(selectedBlockIndex)} style={{ ...styles.toolbarBtn, color: "#dc2626" }}>🗑️</button>
-                  <button onClick={() => setSelectedBlockIndex(null)} style={{ ...styles.toolbarBtn, color: "#16a34a" }}>✓</button>
-                </>
               ) : selectedBlockIndex === -1 ? (
                 /* 标题选中 */
-                <>
+                <div style={styles.toolbarGroup}>
                   <span style={{ fontSize: "12px", color: "#666", marginRight: "8px" }}>文章标题</span>
                   <button onClick={handleStartEditTitle} style={{ ...styles.toolbarBtn, background: "#e8f0fe", color: "#1a73e8" }}>✏️ 编辑</button>
                   <button onClick={() => setSelectedBlockIndex(null)} style={{ ...styles.toolbarBtn, color: "#16a34a" }}>✓</button>
-                </>
+                </div>
+              ) : selectedBlockIndex !== null && selectedBlockIndex >= 0 ? (
+                /* 选中块时的工具栏 */
+                <div style={styles.toolbarGroup}>
+                  {(() => {
+                    const selectedBlock = parsedArticle?.blocks[selectedBlockIndex];
+                    const displayType = getDisplayBlockType(selectedBlock?.type || "paragraph");
+                    return (
+                      <>
+                  <span style={{ fontSize: "12px", color: "#666", marginRight: "4px" }}>
+                    {displayType === "h1" ? "H1" :
+                     displayType === "h2" ? "H2" :
+                     displayType === "h3" ? "H3" :
+                     selectedBlock?.type === "quote" ? "引用" :
+                     selectedBlock?.type === "ul" || selectedBlock?.type === "ol" ? "列表" : "正文"}
+                  </span>
+                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "h1")} style={getActiveToolbarBtnStyle(displayType === "h1")}>H1</button>
+                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "h2")} style={getActiveToolbarBtnStyle(displayType === "h2")}>H2</button>
+                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "h3")} style={getActiveToolbarBtnStyle(displayType === "h3")}>H3</button>
+                  <button onClick={() => handleChangeBlockType(selectedBlockIndex, "paragraph")} style={getActiveToolbarBtnStyle(selectedBlock?.type === "paragraph")}>正文</button>
+                  <button onClick={() => handleConvertToQuote(selectedBlockIndex)} style={getActiveToolbarBtnStyle(selectedBlock?.type === "quote")}>❝引用</button>
+                  <button
+                    onClick={() => selectedBlock?.type === "ol" || selectedBlock?.type === "ul" ? handleChangeBlockType(selectedBlockIndex, "ul") : handleConvertToList(selectedBlockIndex, "ul")}
+                    style={getActiveToolbarBtnStyle(selectedBlock?.type === "ul")}
+                  >☰</button>
+                  <button
+                    onClick={() => selectedBlock?.type === "ol" || selectedBlock?.type === "ul" ? handleChangeBlockType(selectedBlockIndex, "ol") : handleConvertToList(selectedBlockIndex, "ol")}
+                    style={getActiveToolbarBtnStyle(selectedBlock?.type === "ol")}
+                  >⑴</button>
+                      </>
+                    );
+                  })()}
+                </div>
               ) : (
                 /* 无选中 */
-                <span style={{ fontSize: "12px", color: "#999" }}>💡 点击内容块即可选中编辑</span>
+                <div style={styles.toolbarGroup}>
+                  <span style={{ fontSize: "12px", color: "#999", marginRight: "4px" }}>正文</span>
+                  <button style={styles.toolbarBtn}>H1</button>
+                  <button style={styles.toolbarBtn}>H2</button>
+                  <button style={styles.toolbarBtn}>H3</button>
+                  <button style={styles.toolbarBtn}>正文</button>
+                  <button style={styles.toolbarBtn}>❝引用</button>
+                  <button style={styles.toolbarBtn}>☰</button>
+                  <button style={styles.toolbarBtn}>⑴</button>
+                  <span style={{ fontSize: "12px", color: "#999" }}>整篇编辑</span>
+                </div>
               )}
+              {!editingTitle && editingBlockIndex === null && selectedBlockIndex !== null && selectedBlockIndex >= 0 && (
+                <div style={styles.toolbarGroup}>
+                  <button
+                    onClick={() => handleAddBlock(selectedBlockIndex, "above")}
+                    style={styles.iconToolbarBtn}
+                    title="上加一段"
+                    aria-label="上加一段"
+                  >
+                    <InsertParagraphIcon direction="above" />
+                  </button>
+                  <button
+                    onClick={() => handleAddBlock(selectedBlockIndex, "below")}
+                    style={styles.iconToolbarBtn}
+                    title="下加一段"
+                    aria-label="下加一段"
+                  >
+                    <InsertParagraphIcon direction="below" />
+                  </button>
+                  <button onClick={() => handleDeleteBlock(selectedBlockIndex)} style={{ ...styles.toolbarBtn, color: "#dc2626" }}>🗑️</button>
+                  <button onClick={() => setSelectedBlockIndex(null)} style={{ ...styles.toolbarBtn, color: "#16a34a" }}>✓</button>
+                </div>
+              )}
+              {renderTextFormatControls()}
+              <div style={styles.toolbarSpacer} />
+              <div style={styles.toolbarGroup}>
+                {renderBackgroundControl()}
+                {renderTypographyPreferenceControl()}
+                {renderFontSizeControl()}
+              </div>
             </div>
 
             <div
-              style={styles.previewContent}
-              onMouseUp={checkSelection}
+              ref={previewEditorRef}
+              contentEditable={!!parsedArticle}
+              suppressContentEditableWarning
+              style={{
+                ...styles.previewContent,
+                lineHeight: 1.8,
+                backgroundColor: isFormattedMode && includeBackgroundColor ? selectedTemplate.backgroundColor : "#FFF",
+                color: isFormattedMode ? selectedTemplate.textColor : "#333",
+                cursor: parsedArticle ? "text" : "default",
+                outline: "none",
+              }}
+              onMouseUp={saveCurrentSelection}
+              onKeyUp={saveCurrentSelection}
+              onBlur={() => {
+                syncArticleFromPreview();
+                saveCurrentSelection();
+              }}
               onClick={(e) => {
                 if (e.target === e.currentTarget) {
                   setSelectedBlockIndex(null);
@@ -1611,7 +2788,8 @@ export default function EditorPage() {
         <button onClick={handleAIAnalyze} style={{ ...styles.aiBtn }} disabled={isAnalyzing}>
           {isAnalyzing ? "分析中..." : "✨ AI分析排版"}
         </button>
-        {session && <button onClick={handleSaveArticle} style={styles.toolBtn}>保存文章</button>}
+        <button onClick={handleSaveCurrent} style={styles.toolBtn}>保存</button>
+        {session && <button onClick={handleSaveToLibrary} style={styles.toolBtn}>保存到文章库</button>}
         <button onClick={handleCopy} style={styles.primaryBtn}>复制到微信</button>
         <button onClick={handleClear} style={styles.toolBtn}>清空</button>
       </footer>
@@ -1803,6 +2981,34 @@ const styles: { [key: string]: CSSProperties } = {
     marginTop: "8px",
     marginBottom: "8px",
   },
+  previewToolbar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "10px 14px",
+    borderBottom: "1px solid #e0e7ff",
+    minHeight: "54px",
+    flexWrap: "wrap",
+    position: "sticky",
+    top: 0,
+    zIndex: 100,
+    flexShrink: 0,
+  },
+  toolbarGroup: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "4px 6px",
+    border: "1px solid #e8edf7",
+    borderRadius: "6px",
+    backgroundColor: "rgba(255,255,255,0.72)",
+    flexWrap: "wrap",
+    minHeight: "34px",
+  },
+  toolbarSpacer: {
+    flex: "1 1 16px",
+    minWidth: "8px",
+  },
   toolbarBtn: {
     padding: "4px 8px",
     borderRadius: "4px",
@@ -1811,6 +3017,20 @@ const styles: { [key: string]: CSSProperties } = {
     fontSize: "12px",
     cursor: "pointer",
     color: "#333",
+  },
+  iconToolbarBtn: {
+    padding: "4px 6px",
+    borderRadius: "4px",
+    border: "1px solid #E0E0E0",
+    backgroundColor: "#FFF",
+    fontSize: "12px",
+    cursor: "pointer",
+    color: "#333",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "30px",
+    height: "26px",
   },
   previewPanel: {
     flex: 1,

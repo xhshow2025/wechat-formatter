@@ -1,7 +1,6 @@
 "use client"
 
 import { useState } from "react"
-import { useRouter } from "next/navigation"
 import Link from "next/link"
 
 export default function RegisterPage() {
@@ -10,20 +9,21 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [name, setName] = useState("")
   const [error, setError] = useState("")
+  const [success, setSuccess] = useState("")
   const [loading, setLoading] = useState(false)
-  const router = useRouter()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
+    setSuccess("")
 
     if (password !== confirmPassword) {
       setError("两次密码输入不一致")
       return
     }
 
-    if (password.length < 6) {
-      setError("密码至少6位")
+    if (password.length < 8) {
+      setError("密码至少8位")
       return
     }
 
@@ -41,7 +41,9 @@ export default function RegisterPage() {
       if (!res.ok) {
         setError(data.error || "注册失败")
       } else {
-        router.push("/login?registered=true")
+        setSuccess(data.message || "注册成功，请前往邮箱完成验证")
+        setPassword("")
+        setConfirmPassword("")
       }
     } catch {
       setError("注册失败")
@@ -139,7 +141,7 @@ export default function RegisterPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={6}
+              minLength={8}
               style={{
                 width: "100%",
                 padding: "12px",
@@ -184,6 +186,18 @@ export default function RegisterPage() {
               textAlign: "center"
             }}>
               {error}
+            </div>
+          )}
+
+          {success && (
+            <div style={{
+              color: "#188038",
+              fontSize: "14px",
+              marginBottom: "16px",
+              textAlign: "center",
+              lineHeight: 1.6
+            }}>
+              {success}
             </div>
           )}
 

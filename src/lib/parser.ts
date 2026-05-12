@@ -1,7 +1,7 @@
 import { templates } from "./templates";
 
 export interface ParsedContent {
-  type: "h1" | "h2" | "h3" | "paragraph" | "quote" | "code" | "ul" | "ol" | "hr";
+  type: "h1" | "h2" | "h3" | "paragraph" | "quote" | "code" | "ul" | "ol" | "hr" | "image" | "table";
   content: string;
   items?: string[];
 }
@@ -11,8 +11,12 @@ export interface ParsedArticle {
   blocks: ParsedContent[];
 }
 
-// 解析行内格式：加粗、斜体、行内代码、数字高亮
+type HeadingLevel = "h1" | "h2" | "h3";
+
+// 解析行内格式：加粗、斜体、行内代码、内联颜色
 function parseInlineFormatting(text: string): string {
+  // 浏览器 execCommand("foreColor") 常生成 font 标签，转成微信更稳定的内联 span。
+  text = text.replace(/<font\s+color=["']?([^"'>\s]+)["']?\s*>(.*?)<\/font>/gi, '<span style="color: $1;">$2</span>');
   // 行内代码 `code`
   text = text.replace(/`([^`]+)`/g, '<code style="background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em;">$1</code>');
   // 加粗 **text** or __text__
@@ -21,26 +25,16 @@ function parseInlineFormatting(text: string): string {
   // 斜体 *text* or _text_
   text = text.replace(/\*([^*]+)\*/g, '<em style="font-style: italic;">$1</em>');
   text = text.replace(/_([^_]+)_/g, '<em style="font-style: italic;">$1</em>');
-  // 数字高亮：百分比、金额、倍数
-  text = text.replace(/(\d+(?:\.\d+)?%)/g, '<span style="background: linear-gradient(90deg, rgba(255,150,0,0.15), rgba(255,100,0,0.1)); padding: 1px 4px; border-radius: 3px; font-weight: 500; color: inherit;">$1</span>');
-  text = text.replace(/(\d+(?:\.\d+)?亿元)/g, '<span style="background: linear-gradient(90deg, rgba(255,150,0,0.15), rgba(255,100,0,0.1)); padding: 1px 4px; border-radius: 3px; font-weight: 500; color: inherit;">$1</span>');
-  text = text.replace(/(\d+(?:\.\d+)?万)/g, '<span style="background: linear-gradient(90deg, rgba(255,150,0,0.15), rgba(255,100,0,0.1)); padding: 1px 4px; border-radius: 3px; font-weight: 500; color: inherit;">$1</span>');
-  text = text.replace(/(\d+x)/gi, '<span style="background: linear-gradient(90deg, rgba(255,150,0,0.15), rgba(255,100,0,0.1)); padding: 1px 4px; border-radius: 3px; font-weight: 500; color: inherit;">$1</span>');
   return text;
 }
 
 function isHeading(line: string): { level: number; text: string } | null {
   const trimmed = line.trim();
 
-  // Markdown heading: # ## ###
-  if (trimmed.startsWith("### ")) {
-    return { level: 3, text: trimmed.slice(4) };
-  }
-  if (trimmed.startsWith("## ")) {
-    return { level: 2, text: trimmed.slice(3) };
-  }
-  if (trimmed.startsWith("# ")) {
-    return { level: 1, text: trimmed.slice(2) };
+  // Markdown heading: supports "# 标题" and "#标题"; H4-H6 are rendered as H3.
+  const markdownHeading = trimmed.match(/^(#{1,6})\s*(.+)$/);
+  if (markdownHeading) {
+    return { level: Math.min(markdownHeading[1].length, 3), text: markdownHeading[2].trim() };
   }
 
   // Chinese heading pattern: 一、二、三 or 1. 2. 3.
@@ -92,17 +86,28 @@ function isQuote(lines: string[], index: number): { content: string; endIndex: n
   return null;
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function isCodeBlock(lines: string[], index: number): { content: string; language: string; endIndex: number } | null {
   const line = lines[index].trim();
 
   // Markdown code block
-  if (line.startsWith("\`\`\`")) {
+  if (line.startsWith("\`\`\`") || line.startsWith("~~~")) {
+    const fence = line.startsWith("\`\`\`") ? "\`\`\`" : "~~~";
     const language = line.slice(3).trim();
     let content = "";
     let endIndex = index;
 
     for (let i = index + 1; i < lines.length; i++) {
-      if (lines[i].trim() === "\`\`\`") {
+      endIndex = i;
+      if (lines[i].trim().startsWith(fence)) {
         endIndex = i;
         break;
       }
@@ -143,6 +148,39 @@ function isCodeBlock(lines: string[], index: number): { content: string; languag
   }
 
   return null;
+}
+
+function isMarkdownTable(lines: string[], index: number): { content: string; endIndex: number } | null {
+  const current = lines[index]?.trim();
+  const separator = lines[index + 1]?.trim();
+
+  if (!current?.includes("|") || !separator?.includes("|")) return null;
+
+  const separatorCells = separator
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map(cell => cell.trim());
+
+  if (!separatorCells.every(cell => /^:?-{3,}:?$/.test(cell))) return null;
+
+  const rows: string[][] = [];
+  let endIndex = index + 1;
+
+  for (let i = index; i < lines.length; i++) {
+    const row = lines[i].trim();
+    if (!row.includes("|")) break;
+    rows.push(row.replace(/^\||\|$/g, "").split("|").map(cell => cell.trim()));
+    endIndex = i;
+  }
+
+  const header = rows[0] || [];
+  const body = rows.slice(2);
+  const html = `<table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px;">
+    <thead><tr>${header.map(cell => `<th style="border: 1px solid #ddd; padding: 8px; background: #f7f7f7; font-weight: 600; text-align: left;">${parseInlineFormatting(escapeHtml(cell))}</th>`).join("")}</tr></thead>
+    <tbody>${body.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #ddd; padding: 8px; text-align: left;">${parseInlineFormatting(escapeHtml(cell))}</td>`).join("")}</tr>`).join("")}</tbody>
+  </table>`;
+
+  return { content: html, endIndex };
 }
 
 // 启发式检测纯文字内容类型
@@ -234,6 +272,13 @@ function smartParseArticle(text: string): ParsedArticle {
       continue;
     }
 
+    // 图片检测：[IMAGE:url] 格式
+    const imageMatch = trimmed.match(/^\[IMAGE:(.+)\]$/);
+    if (imageMatch) {
+      lineTypes.push({ type: "image", content: imageMatch[1], index: i });
+      continue;
+    }
+
     // 无法用标准规则识别的，用启发式
     const detected = detectContentType(line, blocks[blocks.length - 1] || null, lines.slice(i + 1));
     if (detected) {
@@ -278,6 +323,11 @@ function smartParseArticle(text: string): ParsedArticle {
 
     if (item.type === "hr") {
       blocks.push({ type: "hr", content: "" });
+      continue;
+    }
+
+    if (item.type === "image") {
+      blocks.push({ type: "image", content: item.content });
       continue;
     }
 
@@ -374,6 +424,16 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
       continue;
     }
 
+    const table = isMarkdownTable(lines, i);
+    if (table) {
+      blocks.push({
+        type: "table",
+        content: table.content,
+      });
+      i = table.endIndex;
+      continue;
+    }
+
     // Check for blockquote
     const quote = isQuote(lines, i);
     if (quote) {
@@ -387,6 +447,13 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
 
     if (line.trim() === "---" || line.trim() === "***" || line.trim() === "___") {
       blocks.push({ type: "hr", content: "" });
+      continue;
+    }
+
+    // Check for image: ![alt](url) or [IMAGE:url]
+    const imageMatch = line.trim().match(/^!\[.*?\]\((.+)\)$/) || line.trim().match(/^\[IMAGE:(.+)\]$/);
+    if (imageMatch) {
+      blocks.push({ type: "image", content: imageMatch[1] });
       continue;
     }
 
@@ -433,7 +500,7 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
         title = heading.text;
       } else {
         blocks.push({
-          type: `h${heading.level}` as "h2" | "h3",
+          type: `h${heading.level}` as "h1" | "h2" | "h3",
           content: heading.text,
         });
       }
@@ -450,6 +517,7 @@ export function parseMarkdownArticle(text: string): ParsedArticle {
       if (
         isHeading(nextLine) ||
         isCodeBlock(lines, j) ||
+        isMarkdownTable(lines, j) ||
         isQuote(lines, j) ||
         /^[-*•]/.test(nextLine) ||
         /^\d+[.、]/.test(nextLine) ||
@@ -477,49 +545,100 @@ export function generateWechatHTML(
   article: ParsedArticle, 
   templateId: string, 
   images: string[] = [], 
-  blockCustomStyles: Record<number, { fontSize?: number; lineHeight?: number }> = {}
+  blockCustomStyles: Record<number, { fontSize?: number; lineHeight?: number }> = {},
+  typeFontSizes: Record<string, number> = { h1: 16, h2: 16, h3: 16, paragraph: 16, quote: 16, list: 16 },
+  includeBackgroundColor: boolean = true,
+  headingPreferences: Record<HeadingLevel, HeadingLevel> = { h1: "h1", h2: "h2", h3: "h3" }
 ): string {
   const template = templates.find((t) => t.id === templateId) || templates[0];
+  const sectionBackgroundStyle = includeBackgroundColor ? `background-color: ${template.backgroundColor}; ` : "";
+  const headingLevels: HeadingLevel[] = ["h1", "h2", "h3"];
+  const getDisplayBlockType = (type: ParsedContent["type"]): ParsedContent["type"] => {
+    return headingLevels.includes(type as HeadingLevel)
+      ? headingPreferences[type as HeadingLevel]
+      : type;
+  };
 
   const getH1StyleStr = () => {
-    if (template.h1Background) {
-      return `font-size: 18px; font-weight: 600; color: ${template.h1TextColor || "#ffffff"}; padding: 4px 12px; margin: 20px 0 12px; background: ${template.h1Background}; border-left: 4px solid ${template.primaryColor};`;
+    const size = typeFontSizes.h1;
+    if (template.id === "byte-green") {
+      return `display: table; padding: 0.5em 2em; margin: 1.5em auto 1em; color: #1d2129; font-size: ${size}px; font-weight: 600; text-align: center; background: linear-gradient(90deg, #2ea250, #09fc3c); background-size: 100% 35%; background-position: bottom 0.15em center; background-repeat: no-repeat;`;
     }
-    return `font-size: 20px; font-weight: 700; color: ${template.headingColor}; margin: 20px 0 12px; padding-left: 10px; border-left: 4px solid ${template.headingColor};`;
+    if (template.id === "cute-pink") {
+      return `display: table; padding: 0.8em 2em; margin: 2em auto 1.5em; color: #FFFFFF; font-size: ${size}px; font-weight: bold; text-align: center; letter-spacing: 0.1em; position: relative; line-height: 1.5; width: fit-content; max-width: 90%; background: linear-gradient(135deg, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB, #FF85A2); border-radius: 20px; box-shadow: 0 5px 15px rgba(255, 133, 162, 0.3); border: 3px solid #FFE6EE;`;
+    }
+    if (template.h1Background) {
+      return `font-size: ${size}px; font-weight: 600; color: ${template.h1TextColor || "#ffffff"}; padding: 4px 12px; margin: 20px 0 12px; background: ${template.h1Background}; border-left: 4px solid ${template.h1Color || template.primaryColor};`;
+    }
+    return `font-size: ${size}px; font-weight: 700; color: ${template.h1Color || template.headingColor}; margin: 20px 0 12px; padding-left: 10px; border-left: 4px solid ${template.h1Color || template.headingColor};`;
   };
 
   const getH2StyleStr = (customSize?: number) => {
+    const typeSize = typeFontSizes.h2;
     if (template.id === "byte-green") {
-      return `font-size: ${customSize ? customSize + 'px' : '18px'}; font-weight: 600; color: ${template.headingColor}; margin: 20px 0 12px; padding-left: 10px; border-left: 4px solid ${template.headingColor};`;
+      return `display: table; padding: 0.3em 1em; margin: 1em auto 0.6em; color: white; background: linear-gradient(135deg, #2ea250, #09fc3c); font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; font-weight: 600; text-align: center; border-radius: 6px; letter-spacing: 0.02em; box-shadow: 0 2px 4px rgba(46, 162, 80, 0.15);`;
     }
-    return `font-size: ${customSize ? customSize + 'px' : '17px'}; font-weight: 600; color: ${template.headingColor}; margin: 18px 0 10px; padding-left: 10px; border-left: 4px solid ${template.quoteBorder || template.headingColor};`;
+    if (template.id === "cute-pink") {
+      return `display: table; padding: 0.7em 1.2em; margin: 2.5em auto 1.8em; color: #FFFFFF; font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; font-weight: bold; text-align: center; letter-spacing: 0.1em; position: relative; width: fit-content; max-width: 85%; background: linear-gradient(135deg, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5); border-radius: 30px; box-shadow: 0 4px 10px rgba(255, 133, 162, 0.2); border: 2px solid #FFD6E4;`;
+    }
+    return `font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; font-weight: 600; color: ${template.headingColor}; margin: 18px 0 10px; padding-left: 10px; border-left: 4px solid ${template.quoteBorder || template.headingColor};`;
   };
 
   const getH3StyleStr = (customSize?: number) => {
+    const typeSize = typeFontSizes.h3;
     if (template.id === "byte-green") {
-      return `font-size: ${customSize ? customSize + 'px' : '15px'}; font-weight: 500; color: ${template.subheadingColor}; margin: 16px 0 8px; padding-left: 8px; border-left: 3px solid ${template.subheadingColor};`;
+      return `padding: 0.2em 0; font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; color: #1d2129; margin: 0.8em 0 0.3em; font-weight: 600; display: inline-block; background: linear-gradient(90deg, #2ea250, #09fc3c); background-size: 100% 1.8px; background-position: bottom left; background-repeat: no-repeat;`;
     }
-    return `font-size: ${customSize ? customSize + 'px' : '15px'}; font-weight: 500; color: ${template.subheadingColor}; margin: 14px 0 8px; padding-left: 8px; border-left: 3px solid ${template.subheadingColor};`;
+    if (template.id === "cute-pink") {
+      return `padding: 0.5em 1em 0.5em 2.2em; font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; line-height: 1.6; margin: 2em 0 0.75em; font-weight: 600; position: relative; color: #FFFFFF; background: linear-gradient(90deg, #FFB5D9, #E8B4D5, #FFDFD3); border-radius: 15px; box-shadow: 0 3px 8px rgba(255, 133, 162, 0.2); border: 2px solid #FFE6EE; display: block; width: fit-content;`;
+    }
+    return `font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; font-weight: 500; color: ${template.subheadingColor}; margin: 14px 0 8px; padding-left: 8px; border-left: 3px solid ${template.subheadingColor};`;
   };
 
   const getParagraphStyleStr = (customSize?: number, customHeight?: number) => {
-    return `font-size: ${customSize ? customSize + 'px' : '15px'}; margin: 10px 0; text-align: justify; text-indent: 2em; line-height: ${customHeight || 1.8}; color: ${template.textColor};`;
+    const typeSize = typeFontSizes.paragraph;
+    if (template.id === "byte-green") {
+      return `font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; margin: 0.8em 0; letter-spacing: 0; color: #4e5969; text-align: justify; line-height: ${customHeight || 1.8};`;
+    }
+    if (template.id === "cute-pink") {
+      return `font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; margin: 1em 0; letter-spacing: 0.05em; color: #555; text-align: justify; line-height: ${customHeight || 1.8}; text-indent: 0;`;
+    }
+    return `font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; margin: 10px 0; text-align: justify; text-indent: 0; line-height: ${customHeight || 1.8}; color: ${template.textColor};`;
   };
 
-  const getQuoteStyleStr = () => {
-    return `font-style: normal; padding: 10px 15px; border-left: 4px solid ${template.quoteBorder}; background-color: ${template.quoteBackground}; margin: 12px 0; color: ${template.textColor};`;
+  const getQuoteStyleStr = (customSize?: number, customHeight?: number) => {
+    const typeSize = typeFontSizes.quote;
+    if (template.id === "byte-green") {
+      return `font-style: normal; padding: 0.8em 0.8em 0.8em 1.5em; border-left: 3px solid #2ea250; border-radius: 4px; color: #4e5969; background: linear-gradient(90deg, rgba(46, 162, 80, 0.05), rgba(9, 252, 60, 0.05)); margin: 0.8em 0; font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; line-height: ${customHeight || 1.8};`;
+    }
+    if (template.id === "cute-pink") {
+      return `font-style: normal; padding: 0.5em 1em 0.5em 2em; border-radius: 10px; color: #666; background: rgba(255, 245, 249, 0.8); margin: 1.2em 0; position: relative; border-left: 5px solid #FFB5D9; font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; line-height: ${customHeight || 1.8};`;
+    }
+    return `font-style: normal; padding: 10px 15px; border-left: 4px solid ${template.quoteBorder}; background-color: ${template.quoteBackground}; margin: 12px 0; color: ${template.textColor}; font-size: ${customSize ? customSize + 'px' : typeSize + 'px'}; line-height: ${customHeight || 1.8};`;
   };
 
   let html = `
-<section style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif; background-color: ${template.backgroundColor}; padding: 20px; color: ${template.textColor}; line-height: 1.8; max-width: 100%;">
+<section style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif; ${sectionBackgroundStyle}padding: 20px; color: ${template.textColor}; line-height: 1.8; font-size: ${typeFontSizes.paragraph}px; max-width: 100%;">
 `;
 
   // 标题
-  html += `
-  <h1 style="${getH1StyleStr()} display: block;">
+  if (template.id === "cute-pink") {
+    html += `
+  <div style="position: relative; margin: 2em auto 1.5em; width: fit-content; max-width: 90%;">
+    <span style="position: absolute; top: 50%; left: -1.2em; transform: translateY(-50%); font-size: 1.2em; color: #FFB5D9; z-index: 2;">★</span>
+    <h1 style="${getH1StyleStr()} margin: 0; width: 100%;">
+      ${article.title}
+    </h1>
+    <span style="position: absolute; top: 50%; right: -1.2em; transform: translateY(-50%); font-size: 1.2em; color: #FFB5D9; z-index: 2;">★</span>
+  </div>
+`;
+  } else {
+    html += `
+  <h1 style="${getH1StyleStr()}">
     ${article.title}
   </h1>
 `;
+  }
 
   for (let i = 0; i < article.blocks.length; i++) {
     const block = article.blocks[i];
@@ -527,21 +646,51 @@ export function generateWechatHTML(
     const customFontSize = customStyles.fontSize;
     const customLineHeight = customStyles.lineHeight;
 
-    switch (block.type) {
+    const displayType = getDisplayBlockType(block.type);
+
+    switch (displayType) {
       case "h1":
-        html += `
-  <h1 style="${getH1StyleStr()} display: block;">${block.content}</h1>
+        if (template.id === "cute-pink") {
+          html += `
+  <div style="position: relative; margin: 2em auto 1.5em; width: fit-content; max-width: 90%;">
+    <span style="position: absolute; top: 50%; left: -1.2em; transform: translateY(-50%); font-size: 1.2em; color: #FFB5D9; z-index: 2;">★</span>
+    <h1 style="${getH1StyleStr()} margin: 0; width: 100%;">${block.content}</h1>
+    <span style="position: absolute; top: 50%; right: -1.2em; transform: translateY(-50%); font-size: 1.2em; color: #FFB5D9; z-index: 2;">★</span>
+  </div>
 `;
+        } else {
+          html += `
+  <h1 style="${getH1StyleStr()}">${block.content}</h1>
+`;
+        }
         break;
       case "h2":
-        html += `
-  <h2 style="${getH2StyleStr(customFontSize)} display: block;">${block.content}</h2>
+        if (template.id === "cute-pink") {
+          html += `
+  <div style="position: relative; margin: 2.5em auto 1.8em; width: fit-content; max-width: 85%;">
+    <span style="position: absolute; top: -1.1em; right: 0.6em; font-size: 1.1em; color: #FF85A2; z-index: 2; line-height: 1;">✧</span>
+    <h2 style="${getH2StyleStr(customFontSize)} margin: 0; width: 100%;">${block.content}</h2>
+  </div>
 `;
+        } else {
+          html += `
+  <h2 style="${getH2StyleStr(customFontSize)}">${block.content}</h2>
+`;
+        }
         break;
       case "h3":
-        html += `
+        if (template.id === "cute-pink") {
+          html += `
+  <div style="position: relative; margin: 2em 0 0.75em; width: fit-content;">
+    <span style="position: absolute; left: -1em; top: 50%; transform: translateY(-50%); font-size: 1.1em; z-index: 2; color: #FF85A2; line-height: 1;">✦</span>
+    <h3 style="${getH3StyleStr(customFontSize)} margin: 0; width: 100%;">${block.content}</h3>
+  </div>
+`;
+        } else {
+          html += `
   <h3 style="${getH3StyleStr(customFontSize)} display: block;">${block.content}</h3>
 `;
+        }
         break;
       case "paragraph":
         html += `
@@ -549,9 +698,18 @@ export function generateWechatHTML(
 `;
         break;
       case "quote":
-        html += `
-  <blockquote style="${getQuoteStyleStr()}">${parseInlineFormatting(block.content)}</blockquote>
+        if (template.id === "cute-pink") {
+          html += `
+  <div style="position: relative;">
+    <span style="position: absolute; left: 0.5em; top: -0.2em; font-size: 2em; color: #FF85A2; font-family: Georgia, serif; z-index: 2; line-height: 1;">❝</span>
+    <blockquote style="${getQuoteStyleStr(customFontSize, customLineHeight)}">${parseInlineFormatting(block.content)}</blockquote>
+  </div>
 `;
+        } else {
+          html += `
+  <blockquote style="${getQuoteStyleStr(customFontSize, customLineHeight)}">${parseInlineFormatting(block.content)}</blockquote>
+`;
+        }
         break;
       case "code":
         const codeContentEscaped = block.content.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br/>");
@@ -567,27 +725,93 @@ export function generateWechatHTML(
 </div>`;
         break;
       case "ul":
-        html += `
+        if (template.id === "byte-green") {
+          html += `
+<ul style="padding-left: 1.2em; margin: 0.8em 0; color: #4e5969; list-style-type: none;">
+${block.items?.map((item, j) => `  <li style="margin: 0.3em 0; line-height: ${customLineHeight || 1.8}; font-size: ${customFontSize ? customFontSize + 'px' : typeFontSizes.list + 'px'}; position: relative; padding-left: 0.8em;">
+    <span style="position: absolute; left: 0; top: 0.65em; width: 5px; height: 5px; border-radius: 50%; background: radial-gradient(circle, #09fc3c, #2ea250); opacity: ${j % 2 !== 0 ? 0.7 : 1};"></span>
+    ${parseInlineFormatting(item)}
+  </li>`).join("\n")}
+</ul>`;
+        } else if (template.id === "cute-pink") {
+          html += `
+<ul style="padding-left: 2em; margin: 1em 0; list-style-type: none;">
+${block.items?.map(item => `  <li style="margin: 0.5em 0; line-height: ${customLineHeight || 1.8}; font-size: ${customFontSize ? customFontSize + 'px' : typeFontSizes.list + 'px'}; position: relative;">
+    <span style="position: absolute; left: -1.5em; font-size: 0.9em; color: #FF85A2;">♡</span>
+    ${parseInlineFormatting(item)}
+  </li>`).join("\n")}
+</ul>`;
+        } else {
+          html += `
 <ul style="padding-left: 24px; margin: 8px 0; color: ${template.textColor}; list-style-type: none;">
-${block.items?.map(item => `  <li style="margin: 8px 0; line-height: 1.6; position: relative; padding-left: 16px;">
+${block.items?.map(item => `  <li style="margin: 8px 0; line-height: ${customLineHeight || 1.8}; font-size: ${customFontSize ? customFontSize + 'px' : typeFontSizes.list + 'px'}; position: relative; padding-left: 16px;">
     <span style="position: absolute; left: 0; color: ${template.headingColor || "#2ea250"}; font-weight: bold;">•</span>
     ${parseInlineFormatting(item)}
   </li>`).join("\n")}
 </ul>`;
+        }
         break;
       case "ol":
-        html += `
+        if (template.id === "byte-green") {
+          html += `
+<ol style="padding-left: 1.2em; margin: 0.8em 0; color: #4e5969; list-style-type: none; counter-reset: item;">
+${block.items?.map((item, j) => `  <li style="margin: 0.3em 0; line-height: ${customLineHeight || 1.8}; font-size: ${customFontSize ? customFontSize + 'px' : typeFontSizes.list + 'px'}; position: relative; padding-left: 0.5em; counter-increment: item;">
+    <span style="position: absolute; left: -1em; top: 0.15em; color: #2ea250; font-weight: bold; font-style: italic;">${j + 1}.</span>
+    ${parseInlineFormatting(item)}
+  </li>`).join("\n")}
+</ol>`;
+        } else if (template.id === "cute-pink") {
+          html += `
+<ol style="padding-left: 2em; margin: 1em 0; list-style-type: none; counter-reset: item;">
+${block.items?.map((item, j) => `  <li style="margin: 0.5em 0; line-height: ${customLineHeight || 1.8}; font-size: ${customFontSize ? customFontSize + 'px' : typeFontSizes.list + 'px'}; position: relative; counter-increment: item;">
+    <span style="position: absolute; left: -2em; top: 0.2em; color: #FFFFFF; background: linear-gradient(135deg, #FFB5D9, #E8B4D5); width: 1.5em; height: 1.5em; border-radius: 50%; text-align: center; line-height: 1.5em; font-weight: bold;">${j + 1}</span>
+    ${parseInlineFormatting(item)}
+  </li>`).join("\n")}
+</ol>`;
+        } else {
+          html += `
 <ol style="padding-left: 0; margin: 8px 0; color: ${template.textColor}; list-style-type: none; counter-reset: item;">
-${block.items?.map((item, j) => `  <li style="margin: 8px 0; line-height: 1.6; position: relative; padding-left: 32px; counter-increment: item;">
+${block.items?.map((item, j) => `  <li style="margin: 8px 0; line-height: ${customLineHeight || 1.8}; font-size: ${customFontSize ? customFontSize + 'px' : typeFontSizes.list + 'px'}; position: relative; padding-left: 32px; counter-increment: item;">
     <span style="position: absolute; left: 0; width: 22px; height: 22px; line-height: 22px; text-align: center; background: ${template.headingColor || "#2ea250"}; color: #fff; border-radius: 50%; font-size: 12px; font-weight: bold;">${j + 1}</span>
     ${parseInlineFormatting(item)}
   </li>`).join("\n")}
 </ol>`;
+        }
+        break;
+      case "image":
+        html += `
+  <img src="${block.content}" style="max-width: 100%; height: auto; border-radius: 8px; border: 3px solid ${template.primaryColor}; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin: 16px 0;" />
+`;
+        break;
+      case "table":
+        html += `
+  <div style="overflow-x: auto; margin: 12px 0;">${block.content}</div>
+`;
         break;
       case "hr":
-        html += `
+        if (template.id === "byte-green") {
+          html += `
+<div style="margin: 1.8em 0;">
+  <hr style="height: 1px; border: none; margin: 0; background: linear-gradient(to right, rgba(46, 162, 80, 0), rgba(46, 162, 80, 0.5), rgba(9, 252, 60, 0.5), rgba(9, 252, 60, 0)); position: relative;">
+  <div style="position: relative; height: 0; top: -1px;">
+    <span style="position: absolute; left: 50%; top: 0; transform: translate(-50%, -50%); width: 5px; height: 5px; background: radial-gradient(circle, #09fc3c, #2ea250); border-radius: 50%; box-shadow: -18px 0 0 rgba(46, 162, 80, 0.5), 18px 0 0 rgba(9, 252, 60, 0.5);"></span>
+  </div>
+</div>
+`;
+        } else if (template.id === "cute-pink") {
+          html += `
+<div style="margin: 2.5em auto; position: relative;">
+  <div style="position: relative; height: 0; top: -18px;">
+    <span style="position: absolute; left: 50%; transform: translateX(-50%); font-size: 1.4em; z-index: 2; color: #FF85A2;">✦</span>
+  </div>
+  <hr style="height: 6px; border: none; margin: 0; background: linear-gradient(to right, #FF85A2, #FFB5D9, #FFDFD3, #F4CAD8, #E8B4D5, #D4A0CB, #FF85A2); border-radius: 3px; position: relative;">
+</div>
+`;
+        } else {
+          html += `
   <hr style="height: 1px; border: none; margin: 24px 0; background: ${template.quoteBorder};">
 `;
+        }
         break;
     }
   }

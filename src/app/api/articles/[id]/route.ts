@@ -8,16 +8,16 @@ const prisma = new PrismaClient()
 // 获取单个文章
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions)
-  const { id } = await params
+  const { id } = params
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "未登录" }, { status: 401 })
   }
 
-  const article = await prisma.article.findUnique({
+  const article = await prisma.article.findFirst({
     where: { id, userId: session.user.id }
   })
 
@@ -31,10 +31,10 @@ export async function GET(
 // 更新文章
 export async function PUT(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions)
-  const { id } = await params
+  const { id } = params
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "未登录" }, { status: 401 })
@@ -62,10 +62,10 @@ export async function PUT(
 // 删除文章
 export async function DELETE(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions)
-  const { id } = await params
+  const { id } = params
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "未登录" }, { status: 401 })

@@ -7,7 +7,8 @@ export interface Template {
   backgroundColor: string;
   headingColor: string;
   subheadingColor: string;
-  h3Color?: string; // 可选，H3专用颜色
+  h3Color?: string; // H3专用颜色
+  h1Color?: string; // H1专用颜色
   quoteBackground: string;
   quoteBorder: string;
   codeBackground: string;
@@ -72,24 +73,6 @@ export const templates: Template[] = [
     codeBackground: "#ffedd5",
     cardShadow: "shadow-amber-200/50",
     primaryColor: "#b45309",
-  },
-  {
-    id: "geek-dark",
-    name: "极客黑",
-    description: "深色背景，代码友好，科技感",
-    gradient: "from-slate-900 to-gray-900",
-    textColor: "#e5e7eb",
-    backgroundColor: "#1a1d24",
-    headingColor: "#38bdf8",
-    subheadingColor: "#7dd3fc",
-    h3Color: "#7dd3fc",
-    h1Background: "#38bdf8",
-    h1TextColor: "#ffffff",
-    quoteBackground: "#1e293b",
-    quoteBorder: "#38bdf8",
-    codeBackground: "#1e293b",
-    cardShadow: "shadow-slate-950/50",
-    primaryColor: "#38bdf8",
   },
   {
     id: "warm-time",
@@ -185,19 +168,19 @@ export const templates: Template[] = [
     id: "apple-bento",
     name: "苹果Bento",
     description: "苹果风格，磨砂玻璃，圆角卡片",
-    gradient: "from-blue-500 to-purple-500",
+    gradient: "from-blue-600 to-blue-400",
     textColor: "#1d1d1f",
     backgroundColor: "#f8f9ff",
-    headingColor: "#0071e3",
-    subheadingColor: "#bf5af2",
-    h3Color: "#bf5af2",
-    h1Background: "#0071e3",
+    headingColor: "#0055FF",
+    subheadingColor: "#0055FF",
+    h3Color: "#0055FF",
+    h1Background: "#0055FF",
     h1TextColor: "#ffffff",
-    quoteBackground: "rgba(0, 113, 227, 0.06)",
-    quoteBorder: "#0071e3",
+    quoteBackground: "rgba(0, 85, 255, 0.06)",
+    quoteBorder: "#0055FF",
     codeBackground: "#1a1a25",
-    cardShadow: "shadow-purple-200/50",
-    primaryColor: "#0071e3",
+    cardShadow: "shadow-blue-200/50",
+    primaryColor: "#0055FF",
   },
   {
     id: "mondrian",
@@ -228,6 +211,25 @@ export const templates: Template[] = [
     codeBackground: "#FFF5F7",
     cardShadow: "shadow-pink-200/50",
     primaryColor: "#FF85A2",
+  },
+  {
+    id: "sketch-color",
+    name: "手绘彩铅",
+    description: "柔和粉蜡笔色调，手绘插画风",
+    gradient: "from-orange-100 via-pink-100 to-amber-100",
+    textColor: "#7c6b5d",
+    backgroundColor: "#fff8f0",
+    headingColor: "#e08e79", // 珊瑚粉
+    subheadingColor: "#7eb5a6", // 薄荷绿
+    h3Color: "#8b9dc3", // 雾霾蓝
+    h1Color: "#d4a5a5", // 玫瑰粉
+    h1Background: "linear-gradient(135deg, #fde2e2 0%, #fdf0e6 100%)",
+    h1TextColor: "#9c6b6b",
+    quoteBackground: "#fef6ee",
+    quoteBorder: "#e8c9a0",
+    codeBackground: "#faf5ef",
+    cardShadow: "shadow-stone-200/60",
+    primaryColor: "#e08e79",
   },
 ];
 

@@ -27,6 +27,10 @@ export const authOptions: AuthOptions = {
           return null
         }
 
+        if (!(user as any).emailVerified) {
+          return null
+        }
+
         const isPasswordValid = await bcrypt.compare(
           credentials.password,
           user.password

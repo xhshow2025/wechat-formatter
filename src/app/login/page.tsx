@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { signIn } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
@@ -9,8 +9,22 @@ export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
+  const [verified, setVerified] = useState("")
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+
+  const notice =
+    verified === "success"
+      ? "邮箱验证成功，现在可以登录"
+      : verified === "expired"
+        ? "验证链接已过期，请重新注册或联系管理员"
+        : verified === "invalid"
+          ? "验证链接无效"
+          : ""
+
+  useEffect(() => {
+    setVerified(new URLSearchParams(window.location.search).get("verified") || "")
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -25,7 +39,7 @@ export default function LoginPage() {
       })
 
       if (result?.error) {
-        setError("邮箱或密码错误")
+        setError("邮箱或密码错误，或邮箱尚未完成验证")
       } else {
         router.push("/")
         router.refresh()
@@ -121,6 +135,17 @@ export default function LoginPage() {
               textAlign: "center"
             }}>
               {error}
+            </div>
+          )}
+
+          {notice && !error && (
+            <div style={{
+              color: verified === "success" ? "#188038" : "#e53935",
+              fontSize: "14px",
+              marginBottom: "16px",
+              textAlign: "center"
+            }}>
+              {notice}
             </div>
           )}
 

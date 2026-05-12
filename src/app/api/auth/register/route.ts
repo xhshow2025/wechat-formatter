@@ -1,52 +1,54 @@
 import { NextResponse } from "next/server"
 import { PrismaClient } from "@prisma/client"
 import bcrypt from "bcryptjs"
+import crypto from "crypto"
+import { sendVerificationEmailViaResend } from "@/lib/email"
+import { registerEmailUser } from "@/lib/registration"
 
 const prisma = new PrismaClient()
+
+export const runtime = "nodejs"
 
 export async function POST(request: Request) {
   try {
     const { email, password, name } = await request.json()
+    const appUrl = process.env.NEXTAUTH_URL || process.env.APP_URL || new URL(request.url).origin
 
-    if (!email || !password) {
-      return NextResponse.json(
-        { error: "邮箱和密码不能为空" },
-        { status: 400 }
-      )
-    }
-
-    // 检查邮箱是否已存在
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
+    const result = await registerEmailUser({ email, password, name }, {
+      findUserByEmail: (normalizedEmail) => prisma.user.findUnique({
+        where: { email: normalizedEmail }
+      }),
+      createUser: (data) => (prisma.user.create as any)({
+        data
+      }),
+      deleteUserByEmail: async (normalizedEmail) => {
+        await (prisma.user.deleteMany as any)({
+          where: { email: normalizedEmail, emailVerified: null }
+        })
+      },
+      hashPassword: (plainPassword) => bcrypt.hash(plainPassword, 10),
+      createToken: () => crypto.randomBytes(32).toString("hex"),
+      sendVerificationEmail: sendVerificationEmailViaResend,
+      now: () => new Date(),
+      appUrl,
     })
 
-    if (existingUser) {
+    if (!result.ok) {
       return NextResponse.json(
-        { error: "该邮箱已注册" },
-        { status: 400 }
+        { error: result.error },
+        { status: result.status }
       )
     }
-
-    // 加密密码
-    const hashedPassword = await bcrypt.hash(password, 10)
-
-    // 创建用户
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        name: name || ""
-      }
-    })
 
     return NextResponse.json({
-      id: user.id,
-      email: user.email,
-      name: user.name
+      id: result.user.id,
+      email: result.user.email,
+      name: result.user.name,
+      message: "注册成功，请前往邮箱完成验证"
     })
   } catch (error) {
     return NextResponse.json(
-      { error: "注册失败" },
+      { error: error instanceof Error && error.message === "Email service is not configured" ? "邮箱服务未配置" : "注册失败，请稍后重试" },
       { status: 500 }
     )
   }
