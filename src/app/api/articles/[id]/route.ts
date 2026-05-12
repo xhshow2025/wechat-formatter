@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { getPrisma } from "@/lib/prisma"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -12,6 +12,7 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions)
+  const prisma = getPrisma()
   const { id } = params
 
   if (!session?.user?.id) {
@@ -35,6 +36,7 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions)
+  const prisma = getPrisma()
   const { id } = params
 
   if (!session?.user?.id) {
@@ -66,6 +68,7 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions)
+  const prisma = getPrisma()
   const { id } = params
 
   if (!session?.user?.id) {

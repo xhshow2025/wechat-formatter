@@ -3,13 +3,14 @@ import bcrypt from "bcryptjs"
 import crypto from "crypto"
 import { sendVerificationEmailViaResend } from "@/lib/email"
 import { registerEmailUser } from "@/lib/registration"
-import { prisma } from "@/lib/prisma"
+import { getPrisma } from "@/lib/prisma"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 export async function POST(request: Request) {
   try {
+    const prisma = getPrisma()
     const { email, password, name } = await request.json()
     const appUrl = process.env.NEXTAUTH_URL || process.env.APP_URL || new URL(request.url).origin
 

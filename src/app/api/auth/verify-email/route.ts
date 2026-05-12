@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { getPrisma } from "@/lib/prisma"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 export async function GET(request: Request) {
+  const prisma = getPrisma()
   const url = new URL(request.url)
   const token = url.searchParams.get("token")
   const loginUrl = new URL("/login", url.origin)
