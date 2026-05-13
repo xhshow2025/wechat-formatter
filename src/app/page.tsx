@@ -1577,6 +1577,7 @@ export default function EditorPage() {
 
     document.execCommand("styleWithCSS", false, "true");
     document.execCommand(command, false, value);
+    syncArticleFromPreview();
     saveCurrentSelection();
   };
 
